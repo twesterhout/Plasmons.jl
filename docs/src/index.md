@@ -3,6 +3,8 @@
 ```@index
 ```
 
+Hello world!
+
 ```@autodocs
 Modules = [Plasmons]
 ```

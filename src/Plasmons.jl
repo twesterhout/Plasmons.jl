@@ -30,12 +30,12 @@ where ``f`` is Fermi-Dirac distribution at chemical potential `mu` and temperatu
 is a vector of eigenenergies. `ħω` is a complex frequency including Landau damping (i.e.
 ``\hbar(\omega + i\eta)``). All arguments are assumed to be in energy units.
 """
-function _g(ħω::Complex{R}, E::AbstractVector{R}; mu::R, kT::R) where {R <: Real}
+function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     # Compared to a simple `map` the following saves one allocation
     f = similar(E)
     map!(x -> fermidirac(x, mu = mu, kT = kT), f, E)
     n = length(E)
-    G = similar(E, complex(R), n, n)
+    G = similar(E, complex(ℝ), n, n)
     @inbounds for j in 1:n
         @. G[:, j] = (f - f[j]) / (E - E[j] - ħω)
     end
@@ -46,7 +46,7 @@ end
 @doc raw"""
     polarizability_thesis(ħω, E, ψ; mu, kT) -> χ
 
-Calculates the polarizability matrix ``\chi`` by using methods from the Bachelor thesis.
+Calculate the polarizability matrix ``\chi`` by using methods from the Bachelor thesis.
 """
 polarizability_thesis(ħω, E, ψ; mu, kT) =
     _polarizability_thesis(_g(ħω, E; mu = mu, kT = kT), ψ)
@@ -56,7 +56,7 @@ polarizability_thesis(ħω, E, ψ; mu, kT) =
 
 **This is an internal data structure!**
 
-A workspace which is used by `_polarizability_*` functions to avoid allocating many
+A workspace which is used by `_polarizability_thesis` functions to avoid allocating many
 temporary arrays.
 """
 struct _Workspace{T <: AbstractArray}
@@ -229,15 +229,25 @@ end
     _dot_many!(out, A, temp, 2.0im)
 end
 
-struct _ThreeBlockMatrix{
-    T,
-    T₁ <: AbstractMatrix{T},
-    T₂ <: AbstractMatrix{T},
-    T₃ <: AbstractMatrix{T},
-}
-    block₁::T₁
-    block₂::T₂
-    block₃::T₃
+@doc raw"""
+```
+     ┏     ╷          ╷          ┓
+     ┃  0  │  block₂  │          ┃
+     ┠─────┴──────────┤          ┃
+     ┃                │  block₃  ┃
+     ┃                │          ┃
+     ┃                │          ┃
+     ┃     block₁     ├──────────┨
+     ┃                │          ┃
+     ┃                │    0     ┃
+     ┃                │          ┃
+     ┗                ╵          ┛
+```
+"""
+struct _ThreeBlockMatrix{ℝ <: Real, M <: AbstractMatrix{ℝ}}
+    block₁::M
+    block₂::M
+    block₃::M
 end
 
 function _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int)
@@ -245,9 +255,9 @@ function _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int)
     @assert 0 < n₁ && n₁ < size(G, 1)
     @assert 0 < n₂ && n₂ < size(G, 1)
     return _ThreeBlockMatrix(
-        view(G, (n₁ + 1):size(G, 1), 1:(size(G, 2) - n₂)),
-        view(G, 1:n₁, (n₁ + 1):(size(G, 2) - n₂)),
-        view(G, 1:(size(G, 2) - n₂), (size(G, 1) - n₂ + 1):size(G, 1)),
+        G[(n₁ + 1):size(G, 1), 1:(size(G, 2) - n₂)],
+        G[1:n₁, (n₁ + 1):(size(G, 2) - n₂)],
+        G[1:(size(G, 1) - n₂), (size(G, 2) - n₂ + 1):size(G, 2)],
     )
 end
 
@@ -282,12 +292,34 @@ end
 
 function _analyze(G::AbstractMatrix{<:Real})::Tuple{Int, Int}
     @assert size(G, 1) == size(G, 2)
+    # All elements smaller than ε·‖G‖ are assumed to be negligible and are set to zero.
     cutoff = mapreduce(abs, max, G) * eps(eltype(G))
     return _analyze_top_left(G, cutoff), _analyze_bottom_right(G, cutoff)
 end
 
-function _analyze_top_left(G::AbstractMatrix{T}, cutoff::T)::Int where {T <: Real}
-    # Find an upper bound on n
+@doc raw"""
+    _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
+
+**This is an internal function!**
+
+We assume that `G` is a square matrix with the following block structure:
+```
+        n
+     ╭╌╌╌╌╌╮
+   ╭ ┏     ╷         ┓
+ n ┆ ┃  0  │    A    ┃
+   ╰ ┠─────┼─────────┨
+     ┃     │         ┃
+     ┃  B  │    C    ┃
+     ┃     │         ┃
+     ┗     ╵         ┛
+```
+I.e. the top-left corner of size `n x n` consists of zeros. This function determines `n` by
+treating all elements smaller than `cutoff` as zeros.
+"""
+function _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
+    # Find an upper bound on n. We follow the first column of G and find the first element
+    # which exceeds cutoff.
     n = size(G, 1)
     @inbounds for i in 1:size(G, 1)
         if abs(G[i, 1]) >= cutoff
@@ -295,7 +327,7 @@ function _analyze_top_left(G::AbstractMatrix{T}, cutoff::T)::Int where {T <: Rea
             break
         end
     end
-    # Fine-tune it
+    # Fine-tune it by considering other columns.
     j = 2
     @inbounds while j <= n
         i = 1
@@ -311,7 +343,15 @@ function _analyze_top_left(G::AbstractMatrix{T}, cutoff::T)::Int where {T <: Rea
     return n
 end
 
-function _analyze_bottom_right(G::AbstractMatrix{T}, cutoff::T)::Int where {T <: Real}
+@doc raw"""
+    _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
+
+**This is an internal function!**
+
+Very similar to [`_analyze_top_left`](@ref) except that now the bottom right corner of G is
+assumed to contain zeros. This function determines the size of this block.
+"""
+function _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
     # Find a lower bound on n
     n = 1
     @inbounds for i in size(G, 1):-1:1
@@ -342,10 +382,10 @@ end
 
 **This is an internal function!**
 
-Calculate matrix `G(ħω)` given a vector of eigenenergies `E`, chemical potential `mu`, and
-temperature `kT`. See `_g` for the definition of `G(ħω)`.
+Calculate matrix ``G(ħω)`` given a vector of eigenenergies `E`, chemical potential `mu`, and
+temperature `kT`. See [`_g`](@ref) for the definition of ``G(ħω)``.
 
-Compared to `_g` this function applies to tricks:
+Compared to [`_g`](@ref) this function applies to tricks:
   * `G` is split into real and complex parts `Gᵣ` and `Gᵢ`.
   * We exploit the "block-sparse" structure of `G`.
 """
@@ -375,12 +415,12 @@ is single-threaded and doesn't utilize the CPU well. It is provided here for tes
 purposes only.
 """
 function polarizability_simple(
-    ħω,
-    E::AbstractVector{R},
-    ψ::AbstractMatrix{C};
-    mu::R,
-    kT::R,
-) where {R, C}
+    ħω::Complex{ℝ},
+    E::AbstractVector{ℝ},
+    ψ::AbstractMatrix{<:Union{ℝ, Complex{ℝ}}};
+    mu::ℝ,
+    kT::ℝ,
+) where {ℝ <: Real}
     if size(ψ, 1) != size(ψ, 2) || size(E, 1) != size(ψ, 1)
         throw(DimensionMismatch(
             "dimensions of E and ψ do not match: $(size(E)) & $(size(ψ)); " *
@@ -410,7 +450,8 @@ end
 Compute dielectric function ``\varepsilon`` given polarizability matrix ``\chi`` and Coulomb
 interaction potential ``V``. Dielectric function is simply ``\varepsilon = 1 - \chi V``.
 """
-function dielectric(χ::AbstractMatrix{C}, V::AbstractMatrix{R}) where {C, R}
+function dielectric(χ::AbstractMatrix{Complex{ℝ}}, V::AbstractMatrix{ℝ}) where {ℝ <: Real}
+    ℂ = complex(ℝ)
     if size(χ, 1) != size(χ, 2) || size(χ) != size(V)
         throw(DimensionMismatch(
             "dimensions of χ and V do not match: $(size(χ)) != $(size(V)); " *
@@ -418,17 +459,18 @@ function dielectric(χ::AbstractMatrix{C}, V::AbstractMatrix{R}) where {C, R}
         ))
     end
     ε = similar(χ)
-    fill!(ε, zero(C))
-    @inbounds ε[diagind(ε)] .= one(C)
-    mul!(ε, V, χ, -one(C), one(C))
+    fill!(ε, zero(ℂ))
+    @inbounds ε[diagind(ε)] .= one(ℂ)
+    mul!(ε, V, χ, -one(ℂ), one(ℂ))
     return ε
 end
 
 
 @doc raw"""
-    coulomb_simple(x, y, z; v0) -> V
+    coulomb_simple(x, y, z; V₀) -> V
 
-Given site coordinates construct the simplest approximation of Coulomb interaction potential:
+Given site coordinates (as vectors of real numbers) construct the simplest approximation of
+Coulomb interaction potential:
 ```math
     V_{ab} = \left\{ \begin{aligned}
         &\frac{e^2}{4\pi \varepsilon_0} \frac{1}{|\mathbf{r}_a - \mathbf{r}_b|},
@@ -436,23 +478,23 @@ Given site coordinates construct the simplest approximation of Coulomb interacti
         &V_0, \text{ otherwise}
     \end{aligned} \right.
 ```
-Coordinates are assumed to be in meters, `v0` -- in electron-volts, and the returned matrix
+Coordinates are assumed to be in meters, `V₀` -- in electron-volts, and the returned matrix
 is also in electron-volts.
 
 Note, that electron charge ``e > 0`` in the above formula.
 """
 function coulomb_simple(
-    x::AbstractVector{T},
-    y::AbstractVector{T},
-    z::AbstractVector{T};
-    v0::T,
-) where {T <: Real}
+    x::AbstractVector{ℝ},
+    y::AbstractVector{ℝ},
+    z::AbstractVector{ℝ};
+    V₀::ℝ,
+) where {ℝ <: Real}
     e = 1.602176634E-19 # [C], from https://en.wikipedia.org/wiki/Elementary_charge
     ε₀ = 8.8541878128E-12 # [F/m], from https://en.wikipedia.org/wiki/Vacuum_permittivity
     # NOTE: `scale` contains the first power of `e`. THIS IS NOT A MISTAKE!
     # [e / ε₀] = C * m / F= C * m / (C / V) = V * m, and dividing by distance we get volts.
     # And since we work in electron-volts the second multiplication with e is implicit.
-    scale = T(e / (4 * π * ε₀))
+    scale = ℝ(e / (4 * π * ε₀))
     n = length(x)
     if length(y) != n || length(z) != n
         throw(DimensionMismatch(
@@ -460,15 +502,12 @@ function coulomb_simple(
             "length(y)=$(length(y)), length(z)=$(length(z))",
         ))
     end
-    distance = let
-        x = x
-        y = y
-        z = z
+    distance = let x = x, y = y, z = z
         (i, j) -> hypot(x[i] - x[j], y[i] - y[j], z[i] - z[j])
     end
 
     v = similar(x, n, n)
-    @inbounds v[diagind(v)] .= v0
+    @inbounds v[diagind(v)] .= V₀
     @inbounds for b in 1:(n - 1)
         for a in (b + 1):n
             v[a, b] = scale / distance(a, b)

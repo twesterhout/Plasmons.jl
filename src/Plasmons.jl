@@ -6,6 +6,8 @@ export coulomb_simple
 export read_hamiltonian, read_coordinates
 
 using LinearAlgebra
+using ArgParse
+using HDF5
 
 """
     fermidirac(E; mu, kT)
@@ -56,8 +58,8 @@ polarizability_thesis(ħω, E, ψ; mu, kT) =
 
 **This is an internal data structure!**
 
-A workspace which is used by `_polarizability_thesis` functions to avoid allocating many
-temporary arrays.
+A workspace which is used by [`polarizability_thesis`](@ref) and
+[`polarizability_batched`](@ref) functions to avoid allocating many temporary arrays.
 """
 struct _Workspace{T <: AbstractArray}
     A::T
@@ -139,14 +141,14 @@ end
 _compute_A!(A, as, b, ψ) = _compute_A_loops!(A, as, b, ψ)
 
 function _compute_A_loops!(
-    out::AbstractMatrix{T},
+    out::AbstractMatrix{ℂ},
     as::UnitRange{Int},
     b::Int,
-    ψ::AbstractMatrix{T},
-) where {T}
+    ψ::AbstractMatrix{ℂ},
+) where {ℂ <: Complex}
     # Effectively we want this:
     #     A = view(ψ, as, :) .* transpose(view(ψ, b, :))
-    # but then without memory allocations
+    # but without memory allocations
     offset = as.start - 1
     @inbounds for j in 1:size(ψ, 2)
         scale = conj(ψ[b, j])
@@ -261,40 +263,19 @@ function _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int)
     )
 end
 
-function makeblocks(G::AbstractMatrix)
+function _ThreeBlockMatrix(G::AbstractMatrix)
     if size(G, 1) != size(G, 2)
         throw(DimensionMismatch("Expected a square matrix, but G has size $(size(G))"))
     end
-    n₁, n₂ = _analyze(G)
+    # All elements smaller than ε·‖G‖ are assumed to be negligible and are set to zero.
+    cutoff = mapreduce(abs, max, G) * eps(eltype(G))
+    n₁ = _analyze_top_left(G, cutoff)
+    n₂ = _analyze_bottom_right(G, cutoff)
     if n₁ + n₂ >= size(G, 1)
         throw(Exception("Overlapping zero regions are not yet supported: n₁=$n₁, n₂=$n₂"))
     else
         return _ThreeBlockMatrix(G, n₁, n₂)
     end
-end
-
-function LinearAlgebra.mul!(
-    C::AbstractMatrix,
-    A::AbstractMatrix,
-    B::_ThreeBlockMatrix,
-    α,
-    β,
-)
-    n₁ = size(B.block₂, 1)
-    n₂ = size(B.block₃, 2)
-    #! format: off
-    mul!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):size(A, 2)), B.block₁, α, β)
-    mul!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
-    mul!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
-    #! format: on
-    return C
-end
-
-function _analyze(G::AbstractMatrix{<:Real})::Tuple{Int, Int}
-    @assert size(G, 1) == size(G, 2)
-    # All elements smaller than ε·‖G‖ are assumed to be negligible and are set to zero.
-    cutoff = mapreduce(abs, max, G) * eps(eltype(G))
-    return _analyze_top_left(G, cutoff), _analyze_bottom_right(G, cutoff)
 end
 
 @doc raw"""
@@ -376,6 +357,23 @@ function _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {
     return size(G, 1) + 1 - n
 end
 
+function LinearAlgebra.mul!(
+    C::AbstractMatrix,
+    A::AbstractMatrix,
+    B::_ThreeBlockMatrix,
+    α,
+    β,
+)
+    n₁ = size(B.block₂, 1)
+    n₂ = size(B.block₃, 2)
+    #! format: off
+    mul!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):size(A, 2)), B.block₁, α, β)
+    mul!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
+    mul!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
+    #! format: on
+    return C
+end
+
 
 @doc raw"""
     _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
@@ -389,21 +387,9 @@ Compared to [`_g`](@ref) this function applies to tricks:
   * `G` is split into real and complex parts `Gᵣ` and `Gᵢ`.
   * We exploit the "block-sparse" structure of `G`.
 """
-function _g_blocks(ħω::Complex{R}, E::AbstractVector{R}; mu::R, kT::R) where {R <: Real}
-    # Compared to a simple `map` the following saves one allocation
-    f = similar(E)
-    map!(x -> fermidirac(x, mu = mu, kT = kT), f, E)
-    n = length(E)
-    Gᵣ = similar(E, n, n)
-    Gᵢ = similar(E, n, n)
-    @inbounds for j in 1:n
-        for i in 1:n
-            value = (f[i] - f[j]) / (E[i] - E[j] - ħω)
-            Gᵣ[i, j] = real(value)
-            Gᵢ[i, j] = imag(value)
-        end
-    end
-    return makeblocks(Gᵣ), makeblocks(Gᵢ)
+function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+    G = _g(ħω, E; mu = mu, kT = kT)
+    return _ThreeBlockMatrix(real(G)), _ThreeBlockMatrix(imag(G))
 end
 
 
@@ -520,5 +506,138 @@ end
 
 # Interoperability with TiPSi
 include("tipsi.jl")
+
+function entry_main(;
+    kT::Real,
+    μ::Real,
+    η::Real,
+    ωs::Vector{<:Real},
+    out::Union{HDF5File, HDF5Group},
+    H::Union{Matrix{ℝ}, Nothing} = nothing,
+    E::Union{Vector{ℝ}, Nothing} = nothing,
+    ψ::Union{Matrix{ℂ}, Nothing} = nothing,
+    V::Union{Matrix{ℝ}, Nothing} = nothing,
+) where {ℝ <: Real, ℂ <: Union{ℝ, Complex{ℝ}}}
+    if kT <= 0
+        throw(ArgumentError("invalid 'kT': $kT; expected a positive real number"))
+    end
+    if η <= 0
+        throw(ArgumentError("invalid 'η': $η; expected a positive real number"))
+    end
+    if isnothing(E) || isnothing(ψ)
+        if isnothing(H)
+            throw(ArgumentError(
+                "if Hamiltonian 'H' is not specified, both eigenvalues 'E'" *
+                " and eigenvectors 'ψ' must be provided",
+            ))
+        end
+        @info "Eigenvalues or eigenvectors not provided: diagonalizing the Hamiltonian"
+        factorization = eigen(Hermitian(H))
+        E = factorization.values
+        ψ = factorization.vectors
+        @info "Diagonalization completed"
+    end
+    group_χ = create_group(out, "χ")
+    group_ε::Union{HDF5Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
+    @info "Polarizability matrices χ(ω) will be saved to group 'χ'"
+    if !isnothing(V)
+        @info "Dielectric functions ε(ω) will be saved to group 'ε'"
+    else
+        @warn "Coulomb interaction matrix not provided: dielectric function ε(ω) will not be computed"
+    end
+
+    for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
+        name = @sprintf "%04i" i
+        χ = polarizability(
+            convert(complex(ℝ), ω),
+            E,
+            ψ;
+            mu = convert(ℝ, μ),
+            kT = convert(ℝ, kT),
+        )
+        group_χ[name] = χ
+        flush(group_χ)
+        if !isnothing(V)
+            group_ε[name] = dielectric(χ, V)
+            flush(group_ε)
+        end
+    end
+end
+
+
+ArgParse.parse_item(::Type{Vector{Float64}}, x::AbstractString) =
+    map(s -> parse(Float64, s), split(x, ","))
+
+function _parse_commandline()
+    s = ArgParseSettings()
+    #! format: off
+    @add_arg_table! s begin
+        "--kT"
+            help = "Temperature kʙ·T in eletron-volts"
+            arg_type = Float64
+            required = true
+        "--mu"
+            help = "Chemical potential μ in eletron-volts"
+            arg_type = Float64
+            required = true
+        "--damping"
+            help = "Landau damping η in eletron-volts"
+            arg_type = Float64
+            required = true
+        "--frequency"
+            help = "Comma-separated list of ħω values in eletron-volts for which to compute χ and ε"
+            arg_type = Vector{Float64}
+            required = true
+        "--hamiltonian"
+            help = "Path to Hamiltonian matrix in the input HDF5 file"
+            arg_type = String
+        "--coulomb"
+            help = "Path to unscreened Coulomb interaction matrix in the input HDF5 file"
+            arg_type = String
+        "--eigenvalues"
+            help = "Path to eigenvalues vector in the input HDF5 file"
+            arg_type = String
+        "--eigenvectors"
+            help = "Path to eigenvectors matrix in the input HDF5 file"
+            arg_type = String
+        "input_file"
+            help = "Input HDF5 file"
+            required = true
+        "output_file"
+            help = "Output HDF5 file"
+            required = true
+    end
+    #! format: on
+    return parse_args(s, as_symbols = true)
+end
+
+function tryread(io::HDF5File, path::Union{<:AbstractString, Nothing} = nothing)
+    isnothing(path) && return nothing
+    !has(io, path) && return nothing
+    read(io, path)
+end
+
+function entry_main()
+    args = _parse_commandline()
+    H, E, ψ, V = h5open(args[:input_file], "r") do io
+        tryread(io, get(args, :hamiltonian, nothing)),
+        tryread(io, get(args, :eigenvalues, nothing)),
+        tryread(io, get(args, :eigenvectors, nothing)),
+        tryread(io, get(args, :coulomb, nothing))
+    end
+    h5open(args[:output_file], "w") do io
+        entry_main(
+            kT = args[:kT],
+            μ = args[:mu],
+            η = args[:damping],
+            ωs = args[:frequency],
+            out = io,
+            H = H,
+            E = E,
+            ψ = ψ,
+            V = V,
+        )
+    end
+end
 
 end # module

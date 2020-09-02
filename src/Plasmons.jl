@@ -8,6 +8,7 @@ export read_hamiltonian, read_coordinates
 using LinearAlgebra
 using ArgParse
 using HDF5
+import Printf: @sprintf
 
 """
     fermidirac(E; mu, kT)
@@ -246,7 +247,7 @@ end
      ┗                ╵          ┛
 ```
 """
-struct _ThreeBlockMatrix{ℝ <: Real, M <: AbstractMatrix{ℝ}}
+struct _ThreeBlockMatrix{M <: AbstractMatrix{<:Real}}
     block₁::M
     block₂::M
     block₃::M
@@ -507,15 +508,14 @@ end
 # Interoperability with TiPSi
 include("tipsi.jl")
 
-function entry_main(;
+function main(
+    E::Vector{ℝ},
+    ψ::Matrix{ℂ};
     kT::Real,
     μ::Real,
     η::Real,
     ωs::Vector{<:Real},
     out::Union{HDF5File, HDF5Group},
-    H::Union{Matrix{ℝ}, Nothing} = nothing,
-    E::Union{Vector{ℝ}, Nothing} = nothing,
-    ψ::Union{Matrix{ℂ}, Nothing} = nothing,
     V::Union{Matrix{ℝ}, Nothing} = nothing,
 ) where {ℝ <: Real, ℂ <: Union{ℝ, Complex{ℝ}}}
     if kT <= 0
@@ -537,8 +537,8 @@ function entry_main(;
         ψ = factorization.vectors
         @info "Diagonalization completed"
     end
-    group_χ = create_group(out, "χ")
-    group_ε::Union{HDF5Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
+    group_χ = g_create(out, "χ")
+    group_ε::Union{HDF5Group, Nothing} = isnothing(V) ? nothing : g_create(out, "ε")
     @info "Polarizability matrices χ(ω) will be saved to group 'χ'"
     if !isnothing(V)
         @info "Dielectric functions ε(ω) will be saved to group 'ε'"
@@ -548,7 +548,7 @@ function entry_main(;
 
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         name = @sprintf "%04i" i
-        χ = polarizability(
+        χ = polarizability_simple(
             convert(complex(ℝ), ω),
             E,
             ψ;
@@ -556,13 +556,24 @@ function entry_main(;
             kT = convert(ℝ, kT),
         )
         group_χ[name] = χ
+        attrs(group_χ[name])["ħω"] = ω
         flush(group_χ)
         if !isnothing(V)
             group_ε[name] = dielectric(χ, V)
+            attrs(group_ε[name])["ħω"] = ω
             flush(group_ε)
         end
     end
 end
+function main(H::Matrix{ℂ}; kwargs...) where {ℂ}
+    @info "Eigenvalues or eigenvectors not provided: diagonalizing the Hamiltonian"
+    factorization = eigen(Hermitian(H))
+    E = factorization.values
+    ψ = factorization.vectors
+    @info "Diagonalization completed"
+    main(E, ψ; kwargs...)
+end
+
 
 
 ArgParse.parse_item(::Type{Vector{Float64}}, x::AbstractString) =
@@ -613,7 +624,10 @@ end
 
 function tryread(io::HDF5File, path::Union{<:AbstractString, Nothing} = nothing)
     isnothing(path) && return nothing
-    !has(io, path) && return nothing
+    if !has(io, path)
+        @warn "Path '$path' not found in input HDF5 file"
+        return nothing
+    end
     read(io, path)
 end
 
@@ -625,18 +639,26 @@ function entry_main()
         tryread(io, get(args, :eigenvectors, nothing)),
         tryread(io, get(args, :coulomb, nothing))
     end
+    if (isnothing(E) || isnothing(ψ)) && isnothing(H)
+        throw(ArgumentError(
+            "if Hamiltonian 'H' is not specified, both eigenvalues 'E'" *
+            " and eigenvectors 'ψ' must be provided",
+        ))
+    end
     h5open(args[:output_file], "w") do io
-        entry_main(
+        kwargs = (
             kT = args[:kT],
             μ = args[:mu],
             η = args[:damping],
             ωs = args[:frequency],
             out = io,
-            H = H,
-            E = E,
-            ψ = ψ,
             V = V,
         )
+        if (isnothing(E) || isnothing(ψ))
+            main(H; kwargs...)
+        else
+            main(E, ψ; kwargs...)
+        end
     end
 end
 

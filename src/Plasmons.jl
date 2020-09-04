@@ -14,8 +14,8 @@ import Printf: @sprintf
     fermidirac(E; mu, kT)
 
 Return Fermi-Dirac distribution at energy `E`, chemical potential `mu`, and temperature
-`kT`. Note that `kT` is assumed to be temperature which has been multiplied by Boltzmann
-constant, i.e. physical dimension of `kT` is the same as `E` (e.g. electron-volts).
+`kT`. Note that `kT` is assumed to be temperature multiplied by the Boltzmann constant, i.e.
+physical dimension of `kT` is the same as `E` (e.g. electron-volts).
 """
 @inline fermidirac(E; mu, kT) = 1 / (1 + exp((E - mu) / kT))
 
@@ -31,7 +31,7 @@ Compute matrix G
 ```
 where ``f`` is Fermi-Dirac distribution at chemical potential `mu` and temperature `kT`. `E`
 is a vector of eigenenergies. `ħω` is a complex frequency including Landau damping (i.e.
-``\hbar(\omega + i\eta)``). All arguments are assumed to be in energy units.
+``\hbar\omega + i\eta``). All arguments are assumed to be in energy units.
 """
 function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     # Compared to a simple `map` the following saves one allocation
@@ -43,6 +43,199 @@ function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where 
         @. G[:, j] = (f - f[j]) / (E - E[j] - ħω)
     end
     return G
+end
+
+@doc raw"""
+    _ThreeBlockMatrix
+
+A dense matrix with top-left and bottom-right blocks assumed to be zero:
+```
+     ┏     ╷          ╷          ┓
+     ┃  0  │  block₂  │          ┃
+     ┠─────┴──────────┤          ┃
+     ┃                │  block₃  ┃
+     ┃                │          ┃
+     ┃                │          ┃
+     ┃     block₁     ├──────────┨
+     ┃                │          ┃
+     ┃                │    0     ┃
+     ┃                │          ┃
+     ┗                ╵          ┛
+```
+`_ThreeBlockMatrix` stores blocks 1, 2, and 3 as dense matrices. There is also a special
+overload of `*` operator for faster matrix-matrix multiplication.
+"""
+struct _ThreeBlockMatrix{M <: AbstractMatrix{<:Real}}
+    block₁::M
+    block₂::M
+    block₃::M
+end
+
+@doc raw"""
+    _ThreeBlockMatrix(G, n₁, n₂)
+
+``n₁`` and ``n₂`` are top-left and bottom-right zero subblock sizes respectively.
+"""
+_ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int) = _ThreeBlockMatrix(
+    G[(n₁ + 1):size(G, 1), 1:(size(G, 2) - n₂)],
+    G[1:n₁, (n₁ + 1):(size(G, 2) - n₂)],
+    G[1:(size(G, 1) - n₂), (size(G, 2) - n₂ + 1):size(G, 2)],
+)
+
+@doc raw"""
+    _ThreeBlockMatrix(G)
+
+Analyze matrix ``G`` and construct three-block version of it for faster matrix-matrix
+multiplication.
+"""
+function _ThreeBlockMatrix(G::AbstractMatrix)
+    if size(G, 1) != size(G, 2)
+        throw(DimensionMismatch("Expected a square matrix, but G has size $(size(G))"))
+    end
+    # All elements smaller than ε·‖G‖ are assumed to be negligible and are set to zero.
+    cutoff = mapreduce(abs, max, G) * eps(eltype(G))
+    n₁ = _analyze_top_left(G, cutoff)
+    n₂ = _analyze_bottom_right(G, cutoff)
+    if n₁ + n₂ >= size(G, 1)
+        throw(Exception("Overlapping zero regions are not yet supported: n₁=$n₁, n₂=$n₂"))
+    else
+        return _ThreeBlockMatrix(G, n₁, n₂)
+    end
+end
+
+@doc raw"""
+    _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
+
+**This is an internal function!**
+
+We assume that `G` is a square matrix with the following block structure:
+```
+        n
+     ╭╌╌╌╌╌╮
+   ╭ ┏     ╷         ┓
+ n ┆ ┃  0  │    A    ┃
+   ╰ ┠─────┼─────────┨
+     ┃     │         ┃
+     ┃  B  │    C    ┃
+     ┃     │         ┃
+     ┗     ╵         ┛
+```
+I.e. the top-left corner of size `n x n` consists of zeros. This function determines `n` by
+treating all elements smaller than `cutoff` as zeros.
+"""
+function _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
+    # Find an upper bound on n. We follow the first column of G and find the first element
+    # which exceeds cutoff.
+    n = size(G, 1)
+    @inbounds for i in 1:size(G, 1)
+        if abs(G[i, 1]) >= cutoff
+            n = i - 1
+            break
+        end
+    end
+    # Fine-tune it by considering other columns.
+    j = 2
+    @inbounds while j <= n
+        i = 1
+        while i <= n
+            if abs(G[i, j]) >= cutoff
+                n = max(i, j) - 1
+                break
+            end
+            i += 1
+        end
+        j += 1
+    end
+    return n
+end
+
+@doc raw"""
+    _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
+
+**This is an internal function!**
+
+Very similar to [`_analyze_top_left`](@ref) except that now the bottom right corner of G is
+assumed to contain zeros. This function determines the size of this block.
+"""
+function _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
+    # Find a lower bound on n
+    n = 1
+    @inbounds for i in size(G, 1):-1:1
+        if abs(G[i, size(G, 2)]) >= cutoff
+            n = i + 1
+            break
+        end
+    end
+    # Fine-tune it
+    j = size(G, 2) - 1
+    @inbounds while j >= n
+        i = size(G, 1)
+        while i >= n
+            if abs(G[i, j]) >= cutoff
+                n = min(i, j) + 1
+                break
+            end
+            i -= 1
+        end
+        j -= 1
+    end
+    return size(G, 1) + 1 - n
+end
+
+"""
+    mul!(C, A, B::_ThreeBlockMatrix, α, β) -> C
+
+Overload of matrix-matrix multiplication for _ThreeBlockMatrix. We can spare some flops
+because of the zero blocks.
+
+We replace one bigg GEMM by three smaller:
+```
+  ┏                ╷          ┓       ┏     ╷                     ┓     ┏                           ┓
+  ┃                │          ┃       ┃     │                     ┃     ┃                           ┃
+  ┠                │          ┃       ┃     │                     ┃     ┠────────────────┐          ┃
+  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
+  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
+  ┃       C₁       │          ┃   =   ┃     │         A₁          ┃  x  ┃                │          ┃
+  ┃                │          ┨       ┃     │                     ┃     ┃       B₁       ├          ┨
+  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
+  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
+  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
+  ┗                ╵          ┛       ┗     ╵                     ┛     ┗                ╵          ┛
+```
+"""
+function LinearAlgebra.mul!(
+    C::AbstractMatrix,
+    A::AbstractMatrix,
+    B::_ThreeBlockMatrix,
+    α,
+    β,
+)
+    n₁ = size(B.block₂, 1)
+    n₂ = size(B.block₃, 2)
+    #! format: off
+    mul!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):size(A, 2)), B.block₁, α, β)
+    mul!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
+    mul!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
+    #! format: on
+    return C
+end
+
+
+@doc raw"""
+    _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
+
+**This is an internal function!**
+
+Calculate matrix ``G(ħω)`` given a vector of eigenenergies `E`, chemical potential `mu`, and
+temperature `kT`. See [`_g`](@ref) for the definition of ``G(ħω)``.
+
+Compared to [`_g`](@ref) this function applies to tricks:
+  * `G` is split into real and complex parts `Gᵣ` and `Gᵢ`.
+  * We exploit the "block-sparse" structure of `G`.
+"""
+function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+    G = _g(ħω, E; mu = mu, kT = kT)
+    return _ThreeBlockMatrix(real(G)), _ThreeBlockMatrix(imag(G))
 end
 
 
@@ -232,166 +425,6 @@ end
     _dot_many!(out, A, temp, 2.0im)
 end
 
-@doc raw"""
-```
-     ┏     ╷          ╷          ┓
-     ┃  0  │  block₂  │          ┃
-     ┠─────┴──────────┤          ┃
-     ┃                │  block₃  ┃
-     ┃                │          ┃
-     ┃                │          ┃
-     ┃     block₁     ├──────────┨
-     ┃                │          ┃
-     ┃                │    0     ┃
-     ┃                │          ┃
-     ┗                ╵          ┛
-```
-"""
-struct _ThreeBlockMatrix{M <: AbstractMatrix{<:Real}}
-    block₁::M
-    block₂::M
-    block₃::M
-end
-
-function _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int)
-    @assert size(G, 1) == size(G, 2)
-    @assert 0 < n₁ && n₁ < size(G, 1)
-    @assert 0 < n₂ && n₂ < size(G, 1)
-    return _ThreeBlockMatrix(
-        G[(n₁ + 1):size(G, 1), 1:(size(G, 2) - n₂)],
-        G[1:n₁, (n₁ + 1):(size(G, 2) - n₂)],
-        G[1:(size(G, 1) - n₂), (size(G, 2) - n₂ + 1):size(G, 2)],
-    )
-end
-
-function _ThreeBlockMatrix(G::AbstractMatrix)
-    if size(G, 1) != size(G, 2)
-        throw(DimensionMismatch("Expected a square matrix, but G has size $(size(G))"))
-    end
-    # All elements smaller than ε·‖G‖ are assumed to be negligible and are set to zero.
-    cutoff = mapreduce(abs, max, G) * eps(eltype(G))
-    n₁ = _analyze_top_left(G, cutoff)
-    n₂ = _analyze_bottom_right(G, cutoff)
-    if n₁ + n₂ >= size(G, 1)
-        throw(Exception("Overlapping zero regions are not yet supported: n₁=$n₁, n₂=$n₂"))
-    else
-        return _ThreeBlockMatrix(G, n₁, n₂)
-    end
-end
-
-@doc raw"""
-    _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
-
-**This is an internal function!**
-
-We assume that `G` is a square matrix with the following block structure:
-```
-        n
-     ╭╌╌╌╌╌╮
-   ╭ ┏     ╷         ┓
- n ┆ ┃  0  │    A    ┃
-   ╰ ┠─────┼─────────┨
-     ┃     │         ┃
-     ┃  B  │    C    ┃
-     ┃     │         ┃
-     ┗     ╵         ┛
-```
-I.e. the top-left corner of size `n x n` consists of zeros. This function determines `n` by
-treating all elements smaller than `cutoff` as zeros.
-"""
-function _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
-    # Find an upper bound on n. We follow the first column of G and find the first element
-    # which exceeds cutoff.
-    n = size(G, 1)
-    @inbounds for i in 1:size(G, 1)
-        if abs(G[i, 1]) >= cutoff
-            n = i - 1
-            break
-        end
-    end
-    # Fine-tune it by considering other columns.
-    j = 2
-    @inbounds while j <= n
-        i = 1
-        while i <= n
-            if abs(G[i, j]) >= cutoff
-                n = max(i, j) - 1
-                break
-            end
-            i += 1
-        end
-        j += 1
-    end
-    return n
-end
-
-@doc raw"""
-    _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
-
-**This is an internal function!**
-
-Very similar to [`_analyze_top_left`](@ref) except that now the bottom right corner of G is
-assumed to contain zeros. This function determines the size of this block.
-"""
-function _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
-    # Find a lower bound on n
-    n = 1
-    @inbounds for i in size(G, 1):-1:1
-        if abs(G[i, size(G, 2)]) >= cutoff
-            n = i + 1
-            break
-        end
-    end
-    # Fine-tune it
-    j = size(G, 2) - 1
-    @inbounds while j >= n
-        i = size(G, 1)
-        while i >= n
-            if abs(G[i, j]) >= cutoff
-                n = min(i, j) + 1
-                break
-            end
-            i -= 1
-        end
-        j -= 1
-    end
-    return size(G, 1) + 1 - n
-end
-
-function LinearAlgebra.mul!(
-    C::AbstractMatrix,
-    A::AbstractMatrix,
-    B::_ThreeBlockMatrix,
-    α,
-    β,
-)
-    n₁ = size(B.block₂, 1)
-    n₂ = size(B.block₃, 2)
-    #! format: off
-    mul!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):size(A, 2)), B.block₁, α, β)
-    mul!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
-    mul!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
-    #! format: on
-    return C
-end
-
-
-@doc raw"""
-    _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
-
-**This is an internal function!**
-
-Calculate matrix ``G(ħω)`` given a vector of eigenenergies `E`, chemical potential `mu`, and
-temperature `kT`. See [`_g`](@ref) for the definition of ``G(ħω)``.
-
-Compared to [`_g`](@ref) this function applies to tricks:
-  * `G` is split into real and complex parts `Gᵣ` and `Gᵢ`.
-  * We exploit the "block-sparse" structure of `G`.
-"""
-function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
-    G = _g(ħω, E; mu = mu, kT = kT)
-    return _ThreeBlockMatrix(real(G)), _ThreeBlockMatrix(imag(G))
-end
 
 
 @doc raw"""

@@ -22,15 +22,21 @@ given by the Fermi-Dirac distribution, ``\eta`` is Landau damping, and
 ``\omega`` is the frequency.
 
 First of all, for a given temperature ``T`` and chemical potential ``\mu``, we
-compute occupation numbers ``f(E_i)``. This is done by the [`Plasmons.fermidirac`](@ref)
-function.
+compute occupation numbers ``f(E_i)``.
 
-Next, we compute ``G``. This is done by either [`Plasmons._g`](@ref) or
-[`Plasmons._g_blocks`](@ref) functions.
-
-```@doc
-    _g
+```@docs
+    Plasmons.fermidirac
 ```
+
+Next, we compute the matrix ``G``. This is done by either [`Plasmons._g`](@ref)
+or [`Plasmons._g_blocks`](@ref) functions.
+
+```@docs
+    Plasmons._g
+    Plasmons._g_blocks
+```
+
+Let us now turn to the computation of polarizability matrix elements ``\chi_{a, b}``.
 
 ```@index
 ```

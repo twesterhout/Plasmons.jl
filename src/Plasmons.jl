@@ -11,9 +11,9 @@ using HDF5
 import Printf: @sprintf
 
 """
-    fermidirac(E; mu, kT)
+    fermidirac(E; mu, kT) -> f
 
-Return Fermi-Dirac distribution at energy `E`, chemical potential `mu`, and temperature
+Return Fermi-Dirac distribution ``f`` at energy `E`, chemical potential `mu`, and temperature
 `kT`. Note that `kT` is assumed to be temperature multiplied by the Boltzmann constant, i.e.
 physical dimension of `kT` is the same as `E` (e.g. electron-volts).
 """
@@ -23,15 +23,23 @@ physical dimension of `kT` is the same as `E` (e.g. electron-volts).
 @doc raw"""
     _g(ħω, E; mu, kT) -> G
 
-**This is an internal function!**
+!!! warning
+    This is an internal function!
 
 Compute matrix G
 ```math
     G_{ij} = \frac{f(E_i) - f(E_j)}{E_i - E_j - \hbar\omega}
 ```
-where ``f`` is Fermi-Dirac distribution at chemical potential `mu` and temperature `kT`. `E`
-is a vector of eigenenergies. `ħω` is a complex frequency including Landau damping (i.e.
-``\hbar\omega + i\eta``). All arguments are assumed to be in energy units.
+where ``f`` is [Fermi-Dirac
+distribution](https://en.wikipedia.org/wiki/Fermi%E2%80%93Dirac_statistics) at chemical
+potential `mu` (``\mu``) and temperature `kT` (``k_B T``). `E` is a vector of eigenenergies. `ħω` is a complex
+frequency including Landau damping (i.e.  ``\hbar\omega + i\eta``). All arguments are
+assumed to be in energy units.
+
+Sometimes one can further exploit the structure of ``G``. For ``E \ll \mu`` or ``E \gg \mu``
+Fermi-Dirac distribution is just a constant and ``G`` goes to 0 for all ``\omega``.
+[`Plasmons._g_blocks`](@ref) uses this fact to construct a block-sparse version of
+``G``. The reason why such a block-sparse version is useful will become apparent later.
 """
 function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     # Compared to a simple `map` the following saves one allocation
@@ -224,14 +232,16 @@ end
 @doc raw"""
     _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
 
-**This is an internal function!**
+!!! warning
+    This is an internal function!
 
-Calculate matrix ``G(ħω)`` given a vector of eigenenergies `E`, chemical potential `mu`, and
-temperature `kT`. See [`_g`](@ref) for the definition of ``G(ħω)``.
+Calculate matrix ``G`` given a vector of eigenenergies `E`, chemical potential `mu`, and
+temperature `kT`. See [`_g`](@ref) for the definition of ``G``.
 
 Compared to [`_g`](@ref) this function applies to tricks:
-  * `G` is split into real and complex parts `Gᵣ` and `Gᵢ`.
-  * We exploit the "block-sparse" structure of `G`.
+  * `G` is split into real and imaginary parts `Gᵣ` and `Gᵢ`.
+  * We exploit the "block-sparse" structure of `G` (see
+    [`Plasmons._ThreeBlockMatrix`](@ref)).
 """
 function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     G = _g(ħω, E; mu = mu, kT = kT)

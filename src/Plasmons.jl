@@ -56,20 +56,11 @@ end
 @doc raw"""
     _ThreeBlockMatrix
 
+!!! warning
+    This is an internal data structure
+
 A dense matrix with top-left and bottom-right blocks assumed to be zero:
-```
-     ┏     ╷          ╷          ┓
-     ┃  0  │  block₂  │          ┃
-     ┠─────┴──────────┤          ┃
-     ┃                │  block₃  ┃
-     ┃                │          ┃
-     ┃                │          ┃
-     ┃     block₁     ├──────────┨
-     ┃                │          ┃
-     ┃                │    0     ┃
-     ┃                │          ┃
-     ┗                ╵          ┛
-```
+![three-block-structure](three-blocks.jpg)
 `_ThreeBlockMatrix` stores blocks 1, 2, and 3 as dense matrices. There is also a special
 overload of `*` operator for faster matrix-matrix multiplication.
 """
@@ -82,6 +73,9 @@ end
 @doc raw"""
     _ThreeBlockMatrix(G, n₁, n₂)
 
+!!! warning
+    This is an internal function
+
 ``n₁`` and ``n₂`` are top-left and bottom-right zero subblock sizes respectively.
 """
 _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int) = _ThreeBlockMatrix(
@@ -92,6 +86,9 @@ _ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int) = _ThreeBlockMatrix(
 
 @doc raw"""
     _ThreeBlockMatrix(G)
+
+!!! warning
+    This is an internal function
 
 Analyze matrix ``G`` and construct three-block version of it for faster matrix-matrix
 multiplication.
@@ -114,22 +111,13 @@ end
 @doc raw"""
     _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
 
-**This is an internal function!**
+!!! warning
+    This is an internal function!
 
 We assume that `G` is a square matrix with the following block structure:
-```
-        n
-     ╭╌╌╌╌╌╮
-   ╭ ┏     ╷         ┓
- n ┆ ┃  0  │    A    ┃
-   ╰ ┠─────┼─────────┨
-     ┃     │         ┃
-     ┃  B  │    C    ┃
-     ┃     │         ┃
-     ┗     ╵         ┛
-```
-I.e. the top-left corner of size `n x n` consists of zeros. This function determines `n` by
-treating all elements smaller than `cutoff` as zeros.
+![top-left-block](top-left-block.jpg)
+I.e. the top-left corner of size `n₁ x n₁` consists of zeros. This function determines `n₁`
+by treating all matrix elements smaller than `cutoff` as zeros.
 """
 function _analyze_top_left(G::AbstractMatrix{ℝ}, cutoff::ℝ)::Int where {ℝ <: Real}
     # Find an upper bound on n. We follow the first column of G and find the first element
@@ -160,7 +148,8 @@ end
 @doc raw"""
     _analyze_bottom_right(G::AbstractMatrix{ℝ}, cutoff::ℝ) -> Int
 
-**This is an internal function!**
+!!! warning
+    This is an internal function!
 
 Very similar to [`_analyze_top_left`](@ref) except that now the bottom right corner of G is
 assumed to contain zeros. This function determines the size of this block.
@@ -197,19 +186,10 @@ Overload of matrix-matrix multiplication for _ThreeBlockMatrix. We can spare som
 because of the zero blocks.
 
 We replace one bigg GEMM by three smaller:
-```
-  ┏                ╷          ┓       ┏     ╷                     ┓     ┏                           ┓
-  ┃                │          ┃       ┃     │                     ┃     ┃                           ┃
-  ┠                │          ┃       ┃     │                     ┃     ┠────────────────┐          ┃
-  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
-  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
-  ┃       C₁       │          ┃   =   ┃     │         A₁          ┃  x  ┃                │          ┃
-  ┃                │          ┨       ┃     │                     ┃     ┃       B₁       ├          ┨
-  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
-  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
-  ┃                │          ┃       ┃     │                     ┃     ┃                │          ┃
-  ┗                ╵          ┛       ┗     ╵                     ┛     ┗                ╵          ┛
-```
+
+  1) ![first-gemm](gemm-1.jpg)
+  2) ![second-gemm](gemm-2.jpg)
+  3) ![third-gemm](gemm-3.jpg)
 """
 function LinearAlgebra.mul!(
     C::AbstractMatrix,

@@ -1,6 +1,7 @@
 module Plasmons
 
 export dielectric
+export dispersion
 export polarizability_batched, polarizability_thesis, polarizability_simple
 export coulomb_simple
 export read_hamiltonian, read_coordinates
@@ -329,7 +330,7 @@ function _compute_A_loops!(
     as::UnitRange{Int},
     b::Int,
     ψ::AbstractMatrix{ℂ},
-) where {ℂ <: Complex}
+) where {ℂ <: Union{Real, Complex}}
     # Effectively we want this:
     #     A = view(ψ, as, :) .* transpose(view(ψ, b, :))
     # but without memory allocations
@@ -527,6 +528,31 @@ function coulomb_simple(
     return v
 end
 
+_momentum_eigenvector(
+    k::NTuple{3, ℝ},
+    x::AbstractVector{ℝ},
+    y::AbstractVector{ℝ},
+    z::AbstractVector{ℝ},
+) where {ℝ <: Real} = map(let kˣ = k[1], kʸ = k[2], kᶻ = k[3]
+    (xᵢ, yᵢ, zᵢ) -> exp(1im * (kˣ * xᵢ + kʸ * yᵢ + kᶻ * zᵢ))
+end, x, y, z)
+
+function dispersion(
+    k::NTuple{3, ℝ},
+    ε::AbstractMatrix{Complex{ℝ}},
+    x::AbstractVector{ℝ},
+    y::AbstractVector{ℝ},
+    z::AbstractVector{ℝ},
+) where {ℝ <: Real}
+    if length(x) != length(y)
+        throw(DimensionMismatch("'x' and 'y' have different lengths: $(length(x)) != $(length(y))"))
+    end
+    if size(ε, 1) != length(x)
+        throw(DimensionMismatch("'ε' and 'x' have incompatible dimensions: $(size(ε)) and $(length(x))"))
+    end
+    q = _momentum_eigenvector(k, x, y, z)
+    dot(q, ε, q)
+end
 
 # Interoperability with TiPSi
 include("tipsi.jl")
@@ -570,8 +596,9 @@ function main(
     end
 
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
+        @info "Calculating χ(ω = $ω) ..."
         name = @sprintf "%04i" i
-        χ = polarizability_simple(
+        χ = polarizability_batched(
             convert(complex(ℝ), ω),
             E,
             ψ;

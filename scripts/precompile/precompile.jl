@@ -1,0 +1,17 @@
+using Plasmons
+
+push!(ARGS, "--kT")
+push!(ARGS, "0.025")
+push!(ARGS, "--mu")
+push!(ARGS, "0.4")
+push!(ARGS, "--damping")
+push!(ARGS, "0.006")
+push!(ARGS, "--hamiltonian")
+push!(ARGS, "H")
+push!(ARGS, "--coulomb")
+push!(ARGS, "V")
+push!(ARGS, "--frequency")
+push!(ARGS, "0.0,0.1,0.2")
+push!(ARGS, joinpath(dirname(@__FILE__), "input.h5"))
+push!(ARGS, joinpath(dirname(@__FILE__), "output.h5"))
+julia_main()

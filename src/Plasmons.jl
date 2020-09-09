@@ -1,15 +1,11 @@
 module Plasmons
 
-export dielectric
-export dispersion
-export polarizability_batched, polarizability_thesis, polarizability_simple
-export coulomb_simple
-export read_hamiltonian, read_coordinates
+export dielectric, polarizability, dispersion
+export julia_main
 
 using LinearAlgebra
 using ArgParse
 using HDF5
-import Printf: @sprintf
 
 """
     fermidirac(E; mu, kT) -> f
@@ -229,6 +225,23 @@ function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ)
     return _ThreeBlockMatrix(real(G)), _ThreeBlockMatrix(imag(G))
 end
 
+@doc raw"""
+    polarizability(ħω, E, ψ; mu, kT, method = :batched) -> χ
+
+Compute polarizability matrix ``\chi`` using method `method` (either `:simple`, `:thesis`,
+or `:batched`).
+"""
+polarizability(ħω, E, ψ; mu, kT, method::Symbol = :batched) = Dict{Symbol, Function}(
+    :simple => polarizability_simple,
+    :thesis => polarizability_thesis,
+    :batched => polarizability_batched,
+)[method](
+    ħω,
+    E,
+    ψ;
+    mu = mu,
+    kT = kT,
+)
 
 @doc raw"""
     polarizability_thesis(ħω, E, ψ; mu, kT) -> χ
@@ -241,7 +254,8 @@ polarizability_thesis(ħω, E, ψ; mu, kT) =
 """
     _Workspace{<: AbstractArray}
 
-**This is an internal data structure!**
+!!! warning
+    This is an internal data structure!
 
 A workspace which is used by [`polarizability_thesis`](@ref) and
 [`polarizability_batched`](@ref) functions to avoid allocating many temporary arrays.
@@ -288,7 +302,8 @@ end
 @doc raw"""
     _thesis_mat_el!(ws, a::Int, b::Int, G, ψ) -> χ[a, b]
 
-**This is an internal function!**
+!!! warning
+    This is an internal function!
 
 Compute entry `χ[a, b]` of the polarizability matrix using the method described in the
 Bachelor thesis. It uses a combination of GEMV & CDOT.
@@ -342,46 +357,6 @@ function _compute_A_loops!(
         end
     end
 end
-
-# This was an attempt to improve _compute_A_generic by using SIMD intrinsics. It amounted to
-# a whole bowl of nothing :) Julia optimises the loops well enough by itself. Performance of
-# _compute_A_generic! is within a factor 2 of copyto!.
-
-# Base.@propagate_inbounds function _compute_column!(
-#     out::Ptr{T},
-#     blocks::Int,
-#     remainder::Int,
-#     scale::T,
-#     psi::Ptr{T},
-# ) where {T}
-#     N = div(64, sizeof(T))
-#     c = Vec{N, T}(scale)
-#     i = 0
-#     while i < 64 * blocks
-#         vstore(c * vload(Vec{N, T}, psi + i), out + i)
-#         i += 64
-#     end
-#     mask = Vec{N, T}(remainder) > Vec{N, T}((0, 1, 2, 3, 4, 5, 6, 7))
-#     vstore(c * vload(Vec{N, T}, psi + i, mask), out + i, mask)
-# end
-#
-# function _compute_A_simd!(
-#     A::AbstractMatrix{T},
-#     a::Int,
-#     b::Int,
-#     ψ::AbstractMatrix{T},
-# ) where {T}
-#     blocks, remainder = divrem(size(A, 1), div(64, sizeof(T)))
-#     δA = 1
-#     δψ = a
-#     @inbounds for j in 1:size(A, 2)
-#         scale = conj(ψ[b, j])
-#         _compute_column!(pointer(A, δA), blocks, remainder, scale, pointer(ψ, δψ))
-#         δA += stride(A, 2)
-#         δψ += stride(ψ, 2)
-#     end
-# end
-
 
 _dot_many!(out, A, B, scale) = _dot_many_loops!(out, A, B, complex(scale))
 
@@ -555,7 +530,7 @@ function dispersion(
 end
 
 # Interoperability with TiPSi
-include("tipsi.jl")
+# include("tipsi.jl")
 
 function main(
     E::Vector{ℝ},
@@ -597,7 +572,7 @@ function main(
 
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
-        name = @sprintf "%04i" i
+        name = string(i, pad = 4)
         χ = polarizability_batched(
             convert(complex(ℝ), ω),
             E,
@@ -681,7 +656,7 @@ function tryread(io::HDF5File, path::Union{<:AbstractString, Nothing} = nothing)
     read(io, path)
 end
 
-function entry_main()
+function julia_main()::Cint
     args = _parse_commandline()
     H, E, ψ, V = h5open(args[:input_file], "r") do io
         tryread(io, get(args, :hamiltonian, nothing)),
@@ -710,6 +685,7 @@ function entry_main()
             main(E, ψ; kwargs...)
         end
     end
+    return 0
 end
 
 end # module

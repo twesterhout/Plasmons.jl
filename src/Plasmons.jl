@@ -99,7 +99,7 @@ function _ThreeBlockMatrix(G::AbstractMatrix)
     n₁ = _analyze_top_left(G, cutoff)
     n₂ = _analyze_bottom_right(G, cutoff)
     if n₁ + n₂ >= size(G, 1)
-        throw(Exception("Overlapping zero regions are not yet supported: n₁=$n₁, n₂=$n₂"))
+        throw(ErrorException("Overlapping zero regions are not yet supported: n₁=$n₁, n₂=$n₂"))
     else
         return _ThreeBlockMatrix(G, n₁, n₂)
     end
@@ -285,19 +285,19 @@ end
 
 # General fallback for the case when both G and ψ are complex. No implementation for real G
 # is provided since it's singular without Landau damping η.
-function _polarizability_thesis(
-    G::AbstractMatrix{Complex{T}},
-    ψ::AbstractMatrix{Complex{T}},
-) where {T <: Real}
-    χ = similar(G)
-    ws = _Workspace(similar(G, size(G, 2)), similar(G, size(G, 2)))
-    @inbounds for b in 1:size(G, 2)
-        for a in 1:size(G, 1)
-            χ[a, b] = _thesis_mat_el!(ws, a, b, G, ψ)
-        end
-    end
-    return χ
-end
+# function _polarizability_thesis(
+#     G::AbstractMatrix{Complex{T}},
+#     ψ::AbstractMatrix{Complex{T}},
+# ) where {T <: Real}
+#     χ = similar(G)
+#     ws = _Workspace(similar(G, size(G, 2)), similar(G, size(G, 2)))
+#     @inbounds for b in 1:size(G, 2)
+#         for a in 1:size(G, 1)
+#             χ[a, b] = _thesis_mat_el!(ws, a, b, G, ψ)
+#         end
+#     end
+#     return χ
+# end
 
 @doc raw"""
     _thesis_mat_el!(ws, a::Int, b::Int, G, ψ) -> χ[a, b]

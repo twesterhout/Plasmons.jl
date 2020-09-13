@@ -1,5 +1,11 @@
 # This file is machine-generated - editing it directly is not advised
 
+[[ArgParse]]
+deps = ["Logging", "TextWrap"]
+git-tree-sha1 = "a8fc2e149cd6db276c76faebe197ccd3a92fb9ff"
+uuid = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
+version = "1.1.0"
+
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
@@ -119,7 +125,7 @@ deps = ["Dates", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "R
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [[Plasmons]]
-deps = ["HDF5", "LinearAlgebra", "SparseArrays"]
+deps = ["ArgParse", "HDF5", "LinearAlgebra", "Printf", "SparseArrays"]
 path = "/home/tom/src/Plasmons.jl"
 uuid = "e3da8313-7b13-42cc-b482-8d9dd3d42b80"
 version = "0.1.0"
@@ -153,6 +159,11 @@ uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 deps = ["Distributed", "InteractiveUtils", "Logging", "Random"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[[TextWrap]]
+git-tree-sha1 = "9250ef9b01b66667380cf3275b3f7488d0e25faf"
+uuid = "b718987f-49a8-5099-9789-dcd902bef87d"
+version = "1.0.1"
+
 [[URIParser]]
 deps = ["Unicode"]
 git-tree-sha1 = "53a9f49546b8d2dd2e688d216421d050c9a31d0d"
@@ -168,6 +179,6 @@ uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 
 [[Zlib_jll]]
 deps = ["Libdl", "Pkg"]
-git-tree-sha1 = "2f6c3e15e20e036ee0a0965879b31442b7ec50fa"
+git-tree-sha1 = "fdd89e5ab270ea0f2a0174bd9093e557d06d4bfa"
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.11+9"
+version = "1.2.11+16"

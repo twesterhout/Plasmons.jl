@@ -1,5 +1,9 @@
 # Plasmons.jl
 
+## Installing
+
+
+## Algorithm
 
 Within real-space RPA (Random Phase Approximation) the calculation of
 polarizability matrix ``\chi(\omega)`` amounts to evaluation of the following equation
@@ -37,10 +41,3 @@ or [`Plasmons._g_blocks`](@ref) functions.
 ```
 
 Let us now turn to the computation of polarizability matrix elements ``\chi_{a, b}``.
-
-```@index
-```
-
-```@autodocs
-Modules = [Plasmons]
-```

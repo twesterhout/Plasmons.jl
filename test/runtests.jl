@@ -25,54 +25,14 @@ using Test
         end
     end
 
-    @testset "read_coordinates & read_hamiltonian" begin
-        H, p = h5open("square_8x8.hdf5") do f
-            H = read_hamiltonian(f)
-            p = read_coordinates(f)
-            H, p
-        end
-        @test size(H) == (64, 64)
-        @test ishermitian(H)
-        @test size(p[1]) == (64,)
-        @test size(p[2]) == (64,)
-        @test size(p[3]) == (64,)
-    end
-
     @testset "coulomb_simple" begin
         x = [1.0e-9; 2.0e-9; 3.0e-9]
         y = [4.0e-9; 5.0e-9; 6.0e-9]
         z = [7.0e-9; 8.0e-9; 9.0e-9]
-        V = coulomb_simple(x, y, z; v0 = 4.5)
+        V = Plasmons.coulomb_simple(x, y, z; V₀ = 4.5)
         @test size(V) == (3, 3)
         @test issymmetric(V)
         @test V[diagind(V)] == [4.5; 4.5; 4.5]
-    end
-
-    @testset "polarizability_thesis" begin
-        kT = 8.617333262145E-5 * 300.0
-        μ = 0.4
-
-        H₁ = h5open("square_8x8.hdf5") do f
-            read_hamiltonian(f)
-        end
-        E, ψ = eigen(H₁)
-        for ω in [0.4; 0.43; 0.45]
-            ħω = ω + 1e-3im
-            χ₁ = polarizability_simple(ħω, E, ψ; mu = μ, kT = kT)
-            χ₂ = polarizability_thesis(ħω, E, ψ; mu = μ, kT = kT)
-            @test χ₁ ≈ χ₂
-        end
-
-        # Add random hermitian noise to H
-        δH = rand(ComplexF64, size(H₁)...) .- (0.5 + 0.5im)
-        H₂ = H₁ + δH + δH'
-        E, ψ = eigen(H₂)
-        for ω in [0.4; 0.43; 0.45]
-            ħω = ω + 1e-3im
-            χ₁ = polarizability_simple(ħω, E, ψ; mu = μ, kT = kT)
-            χ₂ = polarizability_thesis(ħω, E, ψ; mu = μ, kT = kT)
-            @test χ₁ ≈ χ₂
-        end
     end
 
     @testset "_analyze_top_left" begin
@@ -113,7 +73,7 @@ using Test
         G = rand(50, 50) .- 0.5
         fill!(view(G, 1:3, 1:11), zero(eltype(G)))
         fill!(view(G, 35:50, 37:50), zero(eltype(G)))
-        B = Plasmons.makeblocks(G)
+        B = Plasmons._ThreeBlockMatrix(G)
 
         A = rand(38, 50)
         C = rand(38, 50)
@@ -121,19 +81,19 @@ using Test
         @test mul!(C, A, B, 0.183, -0.482) ≈ 0.183 .* (A * G) .+ (-0.482) .* D
     end
 
-    @testset "polarizability_batched" begin
+    @testset "polarizability" begin
         kT = 8.617333262145E-5 * 300.0
         μ = 0.4
 
-        H₁ = h5open("square_8x8.hdf5") do f
-            read_hamiltonian(f)
-        end
+        H₁ = h5open(io -> read(io, "H"), "input.h5")
         E, ψ = eigen(H₁)
         for ω in [0.4; 0.43; 0.45]
             ħω = ω + 1e-3im
-            χ₁ = polarizability_thesis(ħω, E, ψ; mu = μ, kT = kT)
-            χ₂ = polarizability_batched(ħω, E, ψ; mu = μ, kT = kT)
+            χ₁ = polarizability(ħω, E, ψ; mu = μ, kT = kT, method = :simple)
+            χ₂ = polarizability(ħω, E, ψ; mu = μ, kT = kT, method = :thesis)
+            χ₃ = polarizability(ħω, E, ψ; mu = μ, kT = kT, method = :batched)
             @test χ₁ ≈ χ₂
+            @test χ₁ ≈ χ₃
         end
     end
 end

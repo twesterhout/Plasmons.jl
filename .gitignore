@@ -8,3 +8,6 @@
 /dev/
 /docs/build/
 /docs/site/
+__pycache__/
+thesis.pdf
+sandbox/

@@ -244,26 +244,29 @@ polarizability(ħω, E, ψ; mu, kT, method::Symbol = :batched) = Dict{Symbol, Fu
 )
 
 @doc raw"""
+    _Workspace{<: AbstractArray}
+
+!!! warning
+    This is an internal data structure!
+
+A workspace which is used by [`polarizability`](@ref) function to avoid allocating many
+temporary arrays. Stores two attributes:
+
+  * A vector `A` which is defined by ``A_j = \langle j | a \rangle \langle b | j \rangle``.
+  * A vector `temp` which is the product ``G A``.
+"""
+struct _Workspace{T <: AbstractArray}
+    A::T
+    temp::T
+end
+
+@doc raw"""
     polarizability_thesis(ħω, E, ψ; mu, kT) -> χ
 
 Calculate the polarizability matrix ``\chi`` by using methods from the Bachelor thesis.
 """
 polarizability_thesis(ħω, E, ψ; mu, kT) =
     _polarizability_thesis(_g(ħω, E; mu = mu, kT = kT), ψ)
-
-"""
-    _Workspace{<: AbstractArray}
-
-!!! warning
-    This is an internal data structure!
-
-A workspace which is used by [`polarizability_thesis`](@ref) and
-[`polarizability_batched`](@ref) functions to avoid allocating many temporary arrays.
-"""
-struct _Workspace{T <: AbstractArray}
-    A::T
-    temp::T
-end
 
 # An optimisation for the case when ψ is real. This reduces the amount of computations by a
 # factor 2.
@@ -309,10 +312,10 @@ Compute entry `χ[a, b]` of the polarizability matrix using the method described
 Bachelor thesis. It uses a combination of GEMV & CDOT.
 """
 function _thesis_mat_el!(ws::_Workspace{<:AbstractVector}, a::Int, b::Int, G, ψ)
-    for i in 1:size(ψ, 2)
-        @inbounds ws.A[i] = ψ[a, i] * conj(ψ[b, i])
+    @inbounds for i in 1:size(ψ, 2)
+        ws.A[i] = conj(ψ[a, i]) * ψ[b, i]
     end
-    mul!(ws.temp, transpose(G), ws.A)
+    mul!(ws.temp, G, ws.A)
     return 2 * dot(ws.A, ws.temp)
 end
 

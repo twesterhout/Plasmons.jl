@@ -2,6 +2,43 @@
 
 ## Installing
 
+Plasmons.jl can be used either as a Julia package or as a standalone executable.
+The latter option is provided for people who do not care about Julia and just
+want to do physics. If you are one of them just download `Plasmons.sif`
+executable file from the
+[Releases](https://github.com/twesterhout/Plasmons.jl/releases) page and you are
+good to go.
+
+Otherwise, install Plasmons.jl using Pkg:
+```julia
+import Pkg; Pkg.add(url="https://github.com/twesterhout/Plasmons.jl")
+```
+
+
+## Using the executable
+
+After downloading the container (`Plasmons.sif` file) from the
+[Releases](https://github.com/twesterhout/Plasmons.jl/releases) page one can
+simply run it. It follows the UNIX philosophy and tries to do one thing and do
+it well.
+
+The one thing is calculating polarizability ``\chi`` (or dielectric function
+``\varepsilon``). It can be described by the following two functions:
+
+```math
+\begin{aligned}
+    \left(H, \omega, \mu, T\right) &\mapsto \chi \\
+    \left(\chi, V\right) &\mapsto \varepsilon
+\end{aligned}
+```
+
+This means that if you provide a Hamiltonian ``H`` and frequency ``\omega`` (and
+some information about the environment, namely chemical potential ``\mu`` and
+temperature ``T``), `Plasmons.sif` will compute ``\chi(\omega)`` for your
+system. If you additionally provide unscreened Coulomb interaction ``V``,
+`Plasmons.sif` will compute ``varepsilon(\omega)`` as well.
+
+
 
 ## Algorithm
 
@@ -40,4 +77,28 @@ or [`Plasmons._g_blocks`](@ref) functions.
     Plasmons._g_blocks
 ```
 
-Let us now turn to the computation of polarizability matrix elements ``\chi_{a, b}``.
+Let us now turn to the computation of polarizability matrix ``\chi``. The naive
+approach is to write 4 nested loops. However, this is tremendously slow! A
+slightly better approach which I used for my Bachelor thesis is to rewrite
+the computation of each ``\chi_{a, b}`` as a combination of `GEMV` and `DOT`
+operations:
+
+```math
+\begin{aligned}
+    \chi_{a, b}
+        &= \sum_{i, j} \left(\langle a | i \rangle \langle i | b \rangle\right)
+            G_{i, j}
+            \left(\langle j | a \rangle \langle b | j \rangle\right)
+         = A(a,b)^\dagger G A(a,b) \;, \\
+        &\text{where } A(a,b)_j = \langle j | a \rangle \langle b | j \rangle \;.
+\end{aligned}
+```
+
+We use the following data structure to hold ``A`` as well as the temporary ``G
+A``.
+
+```@docs
+    Plasmons._Workspace
+```
+
+**TODO**: Finish this.

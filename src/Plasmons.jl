@@ -503,34 +503,45 @@ function coulomb_simple(
     return v
 end
 
-_momentum_eigenvector(
-    k::NTuple{3, ℝ},
-    x::AbstractVector{ℝ},
-    y::AbstractVector{ℝ},
-    z::AbstractVector{ℝ},
-) where {ℝ <: Real} = map(let kˣ = k[1], kʸ = k[2], kᶻ = k[3]
-    (xᵢ, yᵢ, zᵢ) -> exp(1im * (kˣ * xᵢ + kʸ * yᵢ + kᶻ * zᵢ))
-end, x, y, z)
-
-function dispersion(
-    k::NTuple{3, ℝ},
-    ε::AbstractMatrix{Complex{ℝ}},
-    x::AbstractVector{ℝ},
-    y::AbstractVector{ℝ},
-    z::AbstractVector{ℝ},
-) where {ℝ <: Real}
-    if length(x) != length(y)
-        throw(DimensionMismatch("'x' and 'y' have different lengths: $(length(x)) != $(length(y))"))
+function _momentum_eigenvectors(q::NTuple{3, <:Real}, x, y, z; n::Int)
+    ks = 0:(π / (n - 1)):π
+    @assert length(ks) == n
+    out = similar(x, complex(eltype(x)), length(x), length(ks))
+    for i in 1:size(out, 2)
+        fn = let kˣ = q[1] * ks[i], kʸ = q[2] * ks[i], kᶻ = q[3] * ks[i]
+            (xᵢ, yᵢ, zᵢ) -> exp(1im * (kˣ * xᵢ + kʸ * yᵢ + kᶻ * zᵢ))
+        end
+        map!(fn, view(out, :, i), x, y, z)
     end
-    if size(ε, 1) != length(x)
-        throw(DimensionMismatch("'ε' and 'x' have incompatible dimensions: $(size(ε)) and $(length(x))"))
-    end
-    q = _momentum_eigenvector(k, x, y, z)
-    dot(q, ε, q)
+    out
 end
-
-# Interoperability with TiPSi
-# include("tipsi.jl")
+function _dispersion_function(
+    q::NTuple{3, ℝ},
+    x::AbstractVector{ℝ},
+    y::AbstractVector{ℝ},
+    z::AbstractVector{ℝ};
+    n::Int,
+) where {ℝ <: Real}
+    if length(x) != length(y) || length(x) != length(z)
+        throw(DimensionMismatch("'x', 'y', and 'z' have different lengths: $(length(x)) vs. $(length(y)) vs. $(length(z))"))
+    end
+    return let ks = _momentum_eigenvectors(q, x, y, z; n = n), temp = similar(ks, length(x), size(ks, 2))
+        (out, ε) -> begin
+            mul!(temp, ε, ks)
+            for i in 1:length(out)
+                out[i] = dot(view(ks, :, i), view(temp, :, i))
+            end
+        end
+    end
+end
+function dispersion(εs, q, x, y, z; n::Int = 100)
+    fn! = _dispersion_function(q, x, y, z; n = n)
+    out = similar(x, complex(eltype(x)), length(εs), n)
+    for (i, ε) in enumerate(εs)
+        fn!(view(out, i, :), ε)
+    end
+    out
+end
 
 function main(
     E::Vector{ℝ},

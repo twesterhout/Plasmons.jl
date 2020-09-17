@@ -35,17 +35,24 @@ end
 plot_dos(H::AbstractMatrix) = plot_dos(eigvals(Hermitian(H)))
 plot_dos(file::HDF5File) = plot_sample(read(file, "H"))
 
-function make_dispersion(ε, ks, x, y, z)
-    map(k -> Plasmons.dispersion((k, 0.0, 0.0), ε, x, y, z), ks)
-end
+# function make_dispersion(ε, ks, x, y, z)
+#     map(k -> Plasmons.dispersion((k, 0.0, 0.0), ε, x, y, z), ks)
+# end
+# function make_dispersion(file::HDF5File, x, y, z)
+#     a = minimum(filter(_x -> _x > 0, x))
+#     ks = (-π / a):(π / a / 100):(π / a)
+#     ωs = map(d -> real(read(attrs(d), "ħω")), file["ε"])
+#     out = Array{ComplexF64}(undef, length(ωs), length(ks))
+#     for (i, ε) in enumerate(map(read, file["ε"]))
+#         out[i, :] = make_dispersion(ε, ks, x, y, z)
+#     end
+#     out = -1 ./ out
+#     heatmap(ks, ωs, imag(out))
+# end
 function make_dispersion(file::HDF5File, x, y, z)
-    a = minimum(filter(_x -> _x > 0, x))
-    ks = (-π / a):(π / a / 100):(π / a)
-    ωs = map(d -> real(read(attrs(d), "ħω")), file["ε"])
-    out = Array{ComplexF64}(undef, length(ωs), length(ks))
-    for (i, ε) in enumerate(map(read, file["ε"]))
-        out[i, :] = make_dispersion(ε, ks, x, y, z)
-    end
-    out = -1 ./ out
-    heatmap(ks, ωs, imag(out))
+    # ωs = map(d -> real(read(attrs(d), "ħω")), file["ε"])
+    out = dispersion(map(read, file["ε"]), (1.0, 0.0, 0.0), x, y, z; n = 1000)
+    # @info out
+    out = imag(-1 ./ out)
+    heatmap(out)
 end

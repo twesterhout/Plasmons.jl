@@ -2,6 +2,7 @@ using Plasmons
 using LinearAlgebra
 using HDF5
 using Test
+using CUDA
 
 @testset "Plasmons.jl" begin
 
@@ -22,14 +23,14 @@ using Test
             G = Plasmons._g(ħω, E; mu = μ, kT = kT)
             @test eltype(G) == complex(T)
             @test size(G) == (length(E), length(E))
+            @test ishermitian(G)
+            if CUDA.functional()
+                G₂ = Plasmons._g(ħω, CuVector(E); mu = μ, kT = kT)
+                @test eltype(G₂) == complex(T)
+                @test size(G₂) == (length(E), length(E))
+                @test G ≈ G₂
+            end
         end
-
-        E = rand(Float64, 10)
-        μ = 0.45
-        kT = 0.01
-        ħω = 1e-2im
-        G = Plasmons._g(ħω, E; mu = μ, kT = kT)
-        @test ishermitian(G)
     end
 
     @testset "coulomb_simple" begin

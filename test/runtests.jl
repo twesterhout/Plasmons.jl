@@ -3,6 +3,7 @@ using LinearAlgebra
 using HDF5
 using Test
 using CUDA
+using Adapt
 
 @testset "Plasmons.jl" begin
 
@@ -23,24 +24,27 @@ using CUDA
             G = Plasmons._g(ħω, E; mu = μ, kT = kT)
             @test eltype(G) == complex(T)
             @test size(G) == (length(E), length(E))
-            @test ishermitian(G)
+            @test Diagonal(G) ≈ UniformScaling(0.0)
             if CUDA.functional()
                 G₂ = Plasmons._g(ħω, CuVector(E); mu = μ, kT = kT)
                 @test eltype(G₂) == complex(T)
                 @test size(G₂) == (length(E), length(E))
-                @test G ≈ G₂
+                @test typeof(G₂) <: CuArray
+                @test G ≈ Array(G₂)
             end
         end
     end
 
-    @testset "coulomb_simple" begin
-        x = [1.0e-9; 2.0e-9; 3.0e-9]
-        y = [4.0e-9; 5.0e-9; 6.0e-9]
-        z = [7.0e-9; 8.0e-9; 9.0e-9]
-        V = Plasmons.coulomb_simple(x, y, z; V₀ = 4.5)
-        @test size(V) == (3, 3)
-        @test issymmetric(V)
-        @test V[diagind(V)] == [4.5; 4.5; 4.5]
+    if false
+        @testset "coulomb_simple" begin
+            x = [1.0e-9; 2.0e-9; 3.0e-9]
+            y = [4.0e-9; 5.0e-9; 6.0e-9]
+            z = [7.0e-9; 8.0e-9; 9.0e-9]
+            V = Plasmons.coulomb_simple(x, y, z; V₀ = 4.5)
+            @test size(V) == (3, 3)
+            @test issymmetric(V)
+            @test V[diagind(V)] == [4.5; 4.5; 4.5]
+        end
     end
 
     @testset "_analyze_top_left" begin
@@ -77,30 +81,73 @@ using CUDA
         @test Plasmons._analyze_bottom_right(G, 1e-2) == 23
     end
 
-    @testset "_ThreeBlockMatrix" begin
+    @testset "ThreeBlockMatrix" begin
         G = rand(50, 60) .- 0.5
         fill!(view(G, 1:3, 1:11), zero(eltype(G)))
         fill!(view(G, 35:50, 37:60), zero(eltype(G)))
-        @test_throws DimensionMismatch Plasmons._ThreeBlockMatrix(G)
+        @test_throws DimensionMismatch Plasmons.ThreeBlockMatrix(G)
 
-        G = rand(50, 50) .- 0.5
-        fill!(view(G, 1:26, 1:25), zero(eltype(G)))
-        fill!(view(G, 26:50, 26:50), zero(eltype(G)))
-        @test_throws ErrorException Plasmons._ThreeBlockMatrix(G)
+        for T in (Float32, Float64)
+            H = rand(T, 50, 50)
+            H = Hermitian(H + transpose(H))
+            E = eigvals(H)
+            μ = T(0.45)
+            for kT in T[0.001, 0.01, 0.1, 1.0, 10.0]
+                for _ω in -1.0:0.5:1.0
+                    ħω = complex(T)(_ω + 1e-3im)
+                    G₁ = Plasmons._g(ħω, E; mu = μ, kT = kT)
+                    # full matrix
+                    G₂ = Plasmons.ThreeBlockMatrix(G₁)
+                    @test G₁ ≈ convert(Array, G₂)
+                    # real and imaginary parts
+                    G₂ = Plasmons.ThreeBlockMatrix(real(G₁))
+                    @test real(G₁) ≈ convert(Array, G₂)
+                    G₂ = Plasmons.ThreeBlockMatrix(imag(G₁))
+                    @test imag(G₁) ≈ convert(Array, G₂)
+                end
+            end
+        end
     end
 
-    @testset "mul!" begin
+    @testset "mul! for ThreeBlockMatrix" begin
         G = rand(50, 50) .- 0.5
         fill!(view(G, 1:3, 1:11), zero(eltype(G)))
         fill!(view(G, 35:50, 37:50), zero(eltype(G)))
-        B = Plasmons._ThreeBlockMatrix(G)
-
+        B = Plasmons.ThreeBlockMatrix(G)
         A = rand(38, 50)
         C = rand(38, 50)
         D = deepcopy(C)
         @test mul!(C, A, B, 0.183, -0.482) ≈ 0.183 .* (A * G) .+ (-0.482) .* D
+
+        for T in (Float32, Float64)
+            for n in [1, 2, 3, 10, 50]
+                for use_cuda in (false, true)
+                    if use_cuda && !CUDA.functional()
+                        continue
+                    end
+                    G = rand(T, n, n) .- 0.5
+                    n₁ = rand(0:div(n, 2))
+                    n₂ = rand(0:div(n, 2))
+                    fill!(view(G, 1:n₁, 1:n₁), zero(eltype(G)))
+                    fill!(view(G, n - n₂ + 1:n, n - n₂ + 1:n), zero(eltype(G)))
+                    B = Plasmons.ThreeBlockMatrix(G)
+                    use_cuda && (G = CuArray(G))
+                    use_cuda && (B = adapt(CuArray, B))
+
+                    A = rand(T, 7, n)
+                    use_cuda && (A = CuArray(A))
+                    C = rand(T, 7, n)
+                    use_cuda && (C = CuArray(C))
+                    D = deepcopy(C)
+                    mul!(C, A, B, 0.183, -0.482)
+                    mul!(D, A, G, 0.183, -0.482)
+                    @test C ≈ D
+                end
+            end
+        end
     end
 
+    if false
     @testset "polarizability & dielectric" begin
         kT = 8.617333262145E-5 * 300.0
         μ = 0.4
@@ -122,5 +169,6 @@ using CUDA
             ε₃ = dielectric(χ₃, V)
             @test size(ε₃) == size(H)
         end
+    end
     end
 end

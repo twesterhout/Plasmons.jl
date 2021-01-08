@@ -3,6 +3,8 @@ module Plasmons
 export dielectric, polarizability, dispersion
 export julia_main
 
+using CUDA
+using Adapt
 using LinearAlgebra
 using ArgParse
 using HDF5
@@ -51,7 +53,8 @@ function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where 
     end
     return G
 end
-_g(ħω, E::CuArray; mu, kT) = CuArray(_g(ħω, Vector(E); mu = mu, kT = kT))
+_g(ħω::Complex{ℝ}, E::CuVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real} =
+    CuArray(_g(ħω, Vector(E); mu = mu, kT = kT))
 
 @doc raw"""
     _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
@@ -375,7 +378,9 @@ function _dispersion_function(
     if length(x) != length(y) || length(x) != length(z)
         throw(DimensionMismatch("'x', 'y', and 'z' have different lengths: $(length(x)) vs. $(length(y)) vs. $(length(z))"))
     end
-    return let ks = _momentum_eigenvectors(q, x, y, z; n = n), temp = similar(ks, length(x), size(ks, 2))
+    return let ks = _momentum_eigenvectors(q, x, y, z; n = n),
+        temp = similar(ks, length(x), size(ks, 2))
+
         (out, ε) -> begin
             mul!(temp, ε, ks)
             for i in 1:length(out)

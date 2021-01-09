@@ -72,7 +72,12 @@ Compared to [`_g`](@ref) this function applies to tricks:
 """
 function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     G = _g(ħω, E; mu = mu, kT = kT)
-    return ThreeBlockMatrix(real(G)), ThreeBlockMatrix(imag(G))
+    # TODO(twesterhout): Are these extra copies important?
+    ThreeBlockMatrix(real(G)), ThreeBlockMatrix(imag(G))
+end
+function _g_blocks(ħω::Complex{ℝ}, E::CuVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+    (Gᵣ, Gᵢ) = _g_blocks(ħω, Vector(E); mu = mu, kT = kT)
+    adapt(CuArray, Gᵣ), adapt(CuArray, Gᵢ)
 end
 
 @doc raw"""
@@ -105,70 +110,10 @@ temporary arrays. Stores two attributes:
   * A vector `A` which is defined by ``A_j = \langle j | a \rangle \langle b | j \rangle``.
   * A vector `temp` which is the product ``G A``.
 """
-struct _Workspace{T <: AbstractArray}
-    A::T
-    temp::T
+struct _Workspace{T₁ <: AbstractArray, T₂ <: AbstractArray}
+    A::T₁
+    temp::T₂
 end
-
-@doc raw"""
-    polarizability_thesis(ħω, E, ψ; mu, kT) -> χ
-
-Calculate the polarizability matrix ``\chi`` by using methods from the Bachelor thesis.
-"""
-polarizability_thesis(ħω, E, ψ; mu, kT) =
-    _polarizability_thesis(_g(ħω, E; mu = mu, kT = kT), ψ)
-
-# An optimisation for the case when ψ is real. This reduces the amount of computations by a
-# factor 2.
-function _polarizability_thesis(
-    G::AbstractMatrix{Complex{T}},
-    ψ::AbstractMatrix{T},
-) where {T <: Real}
-    χ = similar(G)
-    ws = _Workspace(similar(G, size(G, 2)), similar(G, size(G, 2)))
-    @inbounds for b in 1:size(G, 2)
-        χ[b, b] = _thesis_mat_el!(ws, b, b, G, ψ)
-        for a in (b + 1):size(G, 1)
-            χ[a, b] = _thesis_mat_el!(ws, a, b, G, ψ)
-            χ[b, a] = χ[a, b]
-        end
-    end
-    return χ
-end
-
-# General fallback for the case when both G and ψ are complex. No implementation for real G
-# is provided since it's singular without Landau damping η.
-# function _polarizability_thesis(
-#     G::AbstractMatrix{Complex{T}},
-#     ψ::AbstractMatrix{Complex{T}},
-# ) where {T <: Real}
-#     χ = similar(G)
-#     ws = _Workspace(similar(G, size(G, 2)), similar(G, size(G, 2)))
-#     @inbounds for b in 1:size(G, 2)
-#         for a in 1:size(G, 1)
-#             χ[a, b] = _thesis_mat_el!(ws, a, b, G, ψ)
-#         end
-#     end
-#     return χ
-# end
-
-@doc raw"""
-    _thesis_mat_el!(ws, a::Int, b::Int, G, ψ) -> χ[a, b]
-
-!!! warning
-    This is an internal function!
-
-Compute entry `χ[a, b]` of the polarizability matrix using the method described in the
-Bachelor thesis. It uses a combination of GEMV & CDOT.
-"""
-function _thesis_mat_el!(ws::_Workspace{<:AbstractVector}, a::Int, b::Int, G, ψ)
-    @inbounds for i in 1:size(ψ, 2)
-        ws.A[i] = conj(ψ[a, i]) * ψ[b, i]
-    end
-    mul!(ws.temp, G, ws.A)
-    return 2 * dot(ws.A, ws.temp)
-end
-
 
 polarizability_batched(ħω, E, ψ; mu, kT) =
     _polarizability_batched(_g_blocks(ħω, E; mu = mu, kT = kT)..., ψ)
@@ -190,31 +135,29 @@ function _polarizability_batched(Gᵣ, Gᵢ, ψ::AbstractMatrix{T}) where {T <: 
     return χ
 end
 
-# TODO: Add dispatch for CuArrays because _compute_A_loops! will fail
-_compute_A!(A, as, b, ψ) = _compute_A_loops!(A, as, b, ψ)
-
-function _compute_A_loops!(
+function _compute_A!(
     out::AbstractMatrix{ℂ},
     as::UnitRange{Int},
     b::Int,
     ψ::AbstractMatrix{ℂ},
 ) where {ℂ <: Union{Real, Complex}}
-    # Effectively we want this:
-    #     A = view(ψ, as, :) .* transpose(view(ψ, b, :))
-    # but without memory allocations
-    offset = as.start - 1
-    @inbounds for j in 1:size(ψ, 2)
-        scale = conj(ψ[b, j])
-        @simd for a in as
-            out[a - offset, j] = scale * ψ[a, j]
-        end
-    end
+    out .= view(ψ, as, :) .* transpose(view(ψ, b, :))
+    # Previously, we had an explicit loop on CPU, but the above expression compiles the
+    # pretty much same code and works on GPU.
+    # Old loop (kept here for reference):
+    # offset = as.start - 1
+    # @inbounds for j in 1:size(ψ, 2)
+    #     scale = conj(ψ[b, j])
+    #     @simd for a in as
+    #         out[a - offset, j] = scale * ψ[a, j]
+    #     end
+    # end
 end
 
 _dot_many!(out, A, B, scale) = _dot_many_loops!(out, A, B, complex(scale))
 
 function _dot_many_loops!(
-    out::AbstractVector{Complex{T}},
+    out::AbstractVector,
     A::AbstractMatrix{T},
     B::AbstractMatrix{T},
     scale::Complex{T},

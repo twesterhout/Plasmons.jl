@@ -147,6 +147,46 @@ using Adapt
         end
     end
 
+    @testset "_g_blocks" begin
+        for T in (Float32, Float64)
+            for use_cuda in (false, true)
+                if use_cuda && !CUDA.functional()
+                    continue
+                end
+                E = rand(T, 10)
+                use_cuda && (E = CuArray(E))
+                μ = T(0.45)
+                kT = T(0.01)
+                ħω = complex(T)(0.5 + 1e-2im)
+                (Gᵣ, Gᵢ) = Plasmons._g_blocks(ħω, E; mu = μ, kT = kT)
+                @test eltype(Gᵣ) == T
+                @test size(Gᵣ) == (length(E), length(E))
+                @test eltype(Gᵢ) == T
+                @test size(Gᵢ) == (length(E), length(E))
+            end
+        end
+    end
+
+    @testset "polarizability_thesis" begin
+        for T in (Float32, Float64)
+            for use_cuda in (false, true)
+                if use_cuda && !CUDA.functional()
+                    continue
+                end
+                E = rand(T, 20)
+                use_cuda && (E = CuArray(E))
+                μ = T(0.45)
+                kT = T(0.01)
+                ħω = complex(T)(0.5 + 1e-2im)
+                (Gᵣ, Gᵢ) = Plasmons._g_blocks(ħω, E; mu = μ, kT = kT)
+                @test eltype(Gᵣ) == T
+                @test size(Gᵣ) == (length(E), length(E))
+                @test eltype(Gᵢ) == T
+                @test size(Gᵢ) == (length(E), length(E))
+            end
+        end
+    end
+
     if false
     @testset "polarizability & dielectric" begin
         kT = 8.617333262145E-5 * 300.0

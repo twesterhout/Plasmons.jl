@@ -18,11 +18,18 @@ struct ThreeBlockMatrix{M <: AbstractMatrix}
     block₃::M
 end
 
+Base.ndims(::ThreeBlockMatrix) = 2
+
+Base.eltype(::Type{ThreeBlockMatrix{T}}) where {T} = eltype(T)
+Base.eltype(::Type{ThreeBlockMatrix}) = Any
+
 Base.size(x::ThreeBlockMatrix) = (size(x, 1), size(x, 2))
 function Base.size(x::ThreeBlockMatrix, dim::Integer)
     dim > 0 || throw(DimensionMismatch("dimension out of range: $dim"))
     dim <= 2 ? size(x.block₁, 1) + size(x.block₂, 1) : 1
 end
+
+# Base.show(io::IO, x::ThreeBlockMatrix) = print(io, "ThreeBlockMatrix")
 
 function Base.convert(::Type{M₁}, x::ThreeBlockMatrix{M₂}) where {M₁, M₂ <: M₁}
     N = size(x.block₁, 1) + size(x.block₂, 1)
@@ -50,7 +57,7 @@ Given a square dense matrix `G` and sizes `n₁` and `n₂` of top-left and bott
 respectively, construct a `ThreeBlockMatrix`. All three blocks are copied (this ensure
 contiguous storage for faster matrix-matrix products).
 """
-function ThreeBlockMatrix(G::AbstractMatrix, n₁::Int, n₂::Int)
+function ThreeBlockMatrix(G::AbstractMatrix, n₁::Integer, n₂::Integer)
     if size(G, 1) != size(G, 2)
         throw(DimensionMismatch("'G' must be a square matrix, but got a matrix of shape $(size(G))"))
     end

@@ -156,18 +156,150 @@ end
 
 _dot_many!(out, A, B, scale) = _dot_many_loops!(out, A, B, complex(scale))
 
+_dot_many_loops(A, B) = _dot_many_loops!(similar(A, size(A, 1)), A, B)
 function _dot_many_loops!(
     out::AbstractVector,
     A::AbstractMatrix{T},
     B::AbstractMatrix{T},
-    scale::Complex{T},
+    scale::Complex{T} = complex(one(T)),
 ) where {T}
     @inbounds for j in 1:size(A, 2)
         @simd for i in 1:length(out)
             out[i] += scale * A[i, j] * B[i, j]
         end
     end
+    out
 end
+
+dot_batched_simple(A, B) = sum(A .* B, dims = 2)
+function dot_batched_simple!(
+    out::AbstractVector,
+    A::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+) where {T}
+    copy!(out, dot_batched_simple(A, B))
+end
+
+function dot_kernel!(
+    n,
+    out::CuDeviceVector{T},
+    _A::CuDeviceVector{T},
+    _B::CuDeviceVector{T},
+) where {T}
+    A = CUDA.Const(_A)
+    B = CUDA.Const(_B)
+    block_acc = @cuDynamicSharedMem(T, blockDim().x)
+    # Initialize block_acc for each block within the "first grid"
+    if blockIdx().x <= gridDim().x
+        block_acc[threadIdx().x] = zero(T)
+    end
+
+    # Perform thread-local accumulation in each block
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    thread_acc = zero(T)
+    while i <= n
+        thread_acc += A[i] * B[i]
+        i += blockDim().x * gridDim().x
+    end
+    block_acc[threadIdx().x] += thread_acc
+    sync_threads()
+
+    # Reduction within each block
+    stride = blockDim().x
+    while stride > 1
+        stride >>= 1
+        if threadIdx().x <= stride
+            block_acc[threadIdx().x] += block_acc[threadIdx().x + stride]
+        end
+        sync_threads()
+    end
+    if threadIdx().x == 1
+        out[blockIdx().x] = block_acc[1]
+    end
+    nothing
+end
+function dot_cuda(A::CuVector{T}, B::CuVector{T}) where {T}
+    n = length(A)
+    num_threads(threads) = prevpow(2, threads)
+    num_blocks(threads) = div(n + threads - 1, threads)
+    amount_shmem(threads) = threads * sizeof(T)
+    kernel = @cuda launch = false dot_kernel!(n, A, A, B)
+    config = launch_configuration(kernel.fun, shmem = amount_shmem)
+    threads = num_threads(config.threads)
+    blocks = num_blocks(threads)
+    shmem = amount_shmem(threads)
+    out = similar(A, blocks)
+    kernel(n, out, A, B; threads = threads, blocks = blocks, shmem = shmem)
+    sum(out, dims = 1)
+end
+
+function dot_kernel_batched!(
+    batch_size,
+    n,
+    out::CuDeviceMatrix{T},
+    _A::CuDeviceMatrix{T},
+    _B::CuDeviceMatrix{T},
+) where {T}
+    A = CUDA.Const(_A)
+    B = CUDA.Const(_B)
+    block_acc = @cuDynamicSharedMem(T, blockDim().x, blockDim().y)
+    # Initialize block_acc for each block within the "first grid"
+    if blockIdx().x <= gridDim().x && blockIdx().y <= gridDim().y
+        block_acc[threadIdx().x, threadIdx().y] = zero(T)
+    end
+
+    # Perform thread-local accumulation in each block
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+    if i <= batch_size
+        thread_acc = zero(T)
+        while j <= n
+            thread_acc += A[i, j] * B[i, j]
+            j += blockDim().y * gridDim().y
+        end
+        block_acc[threadIdx().x, threadIdx().y] += thread_acc
+    end
+    sync_threads()
+
+    # Reduction within each block
+    stride = blockDim().y
+    while stride > 1
+        stride >>= 1
+        if threadIdx().y <= stride
+            block_acc[threadIdx().x, threadIdx().y] +=
+                block_acc[threadIdx().x, threadIdx().y + stride]
+        end
+        sync_threads()
+    end
+    if i <= batch_size && threadIdx().y == 1
+        out[i, blockIdx().y] = block_acc[threadIdx().x, 1]
+    end
+    nothing
+end
+function dot_batched_cuda(
+    A::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+) where {T}
+    function num_threads(threads)
+        threads_x = 2 # 64
+        threads_y = 1 # prevpow(2, div(threads, threads_x))
+        threads_x, threads_y
+    end
+    num_blocks(threads) = cld.((size(A, 1), size(A, 2)), threads)
+    amount_shmem(threads) = prod(threads) * sizeof(T)
+    kernel = @cuda launch = false dot_kernel_batched!(size(A, 1), size(A, 2), A, A, B)
+    config = launch_configuration(kernel.fun, shmem = amount_shmem)
+    threads = num_threads(config.threads)
+    blocks = num_blocks(threads)
+    @info "" blocks
+    shmem = amount_shmem(threads)
+    out = similar(A, size(A, 1), blocks[2])
+    kernel(size(A, 1), size(A, 2), out, A, B; threads = threads, blocks = blocks, shmem = shmem)
+    sum(out, dims = 1)
+end
+
+
+
 
 @noinline function _batched_mat_el!(
     out::AbstractVector,

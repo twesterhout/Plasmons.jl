@@ -242,7 +242,7 @@ function dot_kernel_batched!(
 ) where {T}
     A = CUDA.Const(_A)
     B = CUDA.Const(_B)
-    block_acc = @cuDynamicSharedMem(T, blockDim().x, blockDim().y)
+    block_acc = @cuDynamicSharedMem(T, (blockDim().x, blockDim().y))
     # Initialize block_acc for each block within the "first grid"
     if blockIdx().x <= gridDim().x && blockIdx().y <= gridDim().y
         block_acc[threadIdx().x, threadIdx().y] = zero(T)
@@ -276,13 +276,14 @@ function dot_kernel_batched!(
     end
     nothing
 end
-function dot_batched_cuda(
+function dot_batched_cuda!(
+    out::AbstractVector{T},
     A::AbstractMatrix{T},
     B::AbstractMatrix{T},
 ) where {T}
     function num_threads(threads)
-        threads_x = 2 # 64
-        threads_y = 1 # prevpow(2, div(threads, threads_x))
+        threads_x = 64
+        threads_y = prevpow(2, div(threads, threads_x))
         threads_x, threads_y
     end
     num_blocks(threads) = cld.((size(A, 1), size(A, 2)), threads)
@@ -291,12 +292,21 @@ function dot_batched_cuda(
     config = launch_configuration(kernel.fun, shmem = amount_shmem)
     threads = num_threads(config.threads)
     blocks = num_blocks(threads)
-    @info "" blocks
     shmem = amount_shmem(threads)
-    out = similar(A, size(A, 1), blocks[2])
-    kernel(size(A, 1), size(A, 2), out, A, B; threads = threads, blocks = blocks, shmem = shmem)
-    sum(out, dims = 1)
+    temp = similar(A, size(A, 1), blocks[2])
+    kernel(
+        size(A, 1),
+        size(A, 2),
+        temp,
+        A,
+        B;
+        threads = threads,
+        blocks = blocks,
+        shmem = shmem,
+    )
+    sum!(out, temp)
 end
+dot_batched_cuda(A, B) = dot_batched_cuda!(similar(A, size(A, 1)), A, B)
 
 
 

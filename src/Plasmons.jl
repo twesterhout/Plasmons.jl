@@ -94,19 +94,35 @@ g_matrix(
 @doc raw"""
     polarizability(ħω, E, ψ; mu, kT, method = :batched) -> χ
 
-Compute polarizability matrix ``\chi`` using method `method` (either `:simple`, `:thesis`,
-or `:batched`).
+Compute polarizability matrix ``\chi`` using method `method` (either `:simple` or
+`:batched`).
 """
-polarizability(ħω, E, ψ; mu, kT, method::Symbol = :batched) = Dict{Symbol, Function}(
-    :simple => polarizability_simple,
-    :batched => polarizability_batched,
-)[method](
-    ħω,
-    E,
-    ψ;
-    mu = mu,
-    kT = kT,
+function polarizability(
+    ħω::Complex,
+    E::AbstractVector,
+    ψ::AbstractMatrix;
+    mu::Real,
+    kT::Real,
+    method::Symbol = :batched,
+    blocks::Bool = true,
 )
+    if size(ψ, 1) != size(ψ, 2)
+        throw(DimensionMismatch("'ψ' has wrong shape: $(size(ψ)); expected a square matrix"))
+    end
+    if size(E, 1) != size(ψ, 1)
+        throw(DimensionMismatch(
+            "dimensions of 'E' and 'ψ' do not match: $(size(E)) & $(size(ψ)); " *
+            "expected 'ψ' to be of the same dimension as 'E'",
+        ))
+    end
+    if method == :simple
+        polarizability_simple(ħω, E, ψ; mu = mu, kT = kT)
+    elseif method == :batched
+        polarizability_batched(ħω, E, ψ; mu = mu, kT = kT, blocks = blocks)
+    else
+        throw(ArgumentError("invalid 'method': $method; expected either :simple or :batched"))
+    end
+end
 
 
 @doc raw"""
@@ -214,12 +230,6 @@ function polarizability_simple(
     mu::ℝ,
     kT::ℝ,
 ) where {ℝ <: Real}
-    if size(ψ, 1) != size(ψ, 2) || size(E, 1) != size(ψ, 1)
-        throw(DimensionMismatch(
-            "dimensions of E and ψ do not match: $(size(E)) & $(size(ψ)); " *
-            "expected ψ to be a square matrix of the same dimension as E",
-        ))
-    end
     G = _build_g(ħω, E; mu = mu, kT = kT)
     χ = similar(G)
     @inbounds for a in 1:size(χ, 2)

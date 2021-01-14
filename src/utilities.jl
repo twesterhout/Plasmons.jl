@@ -50,13 +50,19 @@ for (fname, elty) in (
 end
 for elty in (:Float32, :Float64, :ComplexF32, :ComplexF64)
     @eval begin
-        _mul_with_strides!(
-            C::CUDA.StridedSubCuArray{$elty, 2},
+        function _mul_with_strides!(
+            C::StridedCuMatrix{$elty},
             A::StridedCuMatrix{$elty},
             B::StridedCuMatrix{$elty},
             a::$elty,
             b::$elty,
-        ) = _gemm!('N', 'N', a, A, B, b, C)
+        )
+            if C isa CuArray
+                mul!(C, A, B, a, b)
+            else
+                _gemm!('N', 'N', a, A, B, b, C)
+            end
+        end
         _mul_with_strides!(C::StridedMatrix{$elty}, A, B, a::$elty, b::$elty) =
             mul!(C, A, B, a, b)
     end

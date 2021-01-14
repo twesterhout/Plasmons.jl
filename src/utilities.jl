@@ -1,4 +1,66 @@
-using LinearAlgebra
+
+for (fname, elty) in (
+    (Symbol("cublasDgemm_v2"), :Float64),
+    (Symbol("cublasSgemm_v2"), :Float32),
+    (Symbol("cublasZgemm_v2"), :ComplexF64),
+    (Symbol("cublasCgemm_v2"), :ComplexF32),
+)
+    @eval begin
+        function _gemm!(
+            transA::Char,
+            transB::Char,
+            alpha::Number,
+            A::StridedCuMatrix{$elty},
+            B::StridedCuMatrix{$elty},
+            beta::Number,
+            C::StridedCuMatrix{$elty},
+        )
+            m = size(A, transA == 'N' ? 1 : 2)
+            k = size(A, transA == 'N' ? 2 : 1)
+            n = size(B, transB == 'N' ? 2 : 1)
+            if m != size(C, 1) || n != size(C, 2) || k != size(B, transB == 'N' ? 1 : 2)
+                throw(DimensionMismatch(""))
+            end
+            if stride(A, 1) != 1 || stride(B, 1) != 1 || stride(C, 1) != 1
+                throw(DimensionMismatch("cuBLAS requires matrices to be in column-major order"))
+            end
+            lda = max(1, stride(A, 2))
+            ldb = max(1, stride(B, 2))
+            ldc = max(1, stride(C, 2))
+            CUDA.CUBLAS.$fname(
+                CUDA.CUBLAS.handle(),
+                transA,
+                transB,
+                m,
+                n,
+                k,
+                alpha,
+                A,
+                lda,
+                B,
+                ldb,
+                beta,
+                C,
+                ldc,
+            )
+            C
+        end
+
+    end
+end
+for elty in (:Float32, :Float64, :ComplexF32, :ComplexF64)
+    @eval begin
+        _mul_with_strides!(
+            C::CUDA.StridedSubCuArray{$elty, 2},
+            A::StridedCuMatrix{$elty},
+            B::StridedCuMatrix{$elty},
+            a::$elty,
+            b::$elty,
+        ) = _gemm!('N', 'N', a, A, B, b, C)
+        _mul_with_strides!(C::StridedMatrix{$elty}, A, B, a::$elty, b::$elty) =
+            mul!(C, A, B, a, b)
+    end
+end
 
 @doc raw"""
     ThreeBlockMatrix
@@ -12,7 +74,7 @@ A dense matrix with top-left and bottom-right blocks assumed to be zero:
 `ThreeBlockMatrix` stores blocks 1, 2, and 3 as dense matrices. There is also a special
 overload of [`LinearAlgebra.mul!`](@ref) function for faster matrix-matrix multiplication.
 """
-struct ThreeBlockMatrix{M <: AbstractMatrix}
+struct ThreeBlockMatrix{T, M <: AbstractMatrix{T}}
     block₁::M
     block₂::M
     block₃::M
@@ -20,7 +82,8 @@ end
 
 Base.ndims(::ThreeBlockMatrix) = 2
 
-Base.eltype(::Type{ThreeBlockMatrix{T}}) where {T} = eltype(T)
+Base.eltype(::Type{ThreeBlockMatrix{T, M}}) where {T, M} = T
+# Base.eltype(::Type{ThreeBlockMatrix{T}}) where {T} = T
 Base.eltype(::Type{ThreeBlockMatrix}) = Any
 
 Base.size(x::ThreeBlockMatrix) = (size(x, 1), size(x, 2))
@@ -29,9 +92,14 @@ function Base.size(x::ThreeBlockMatrix, dim::Integer)
     dim <= 2 ? size(x.block₁, 1) + size(x.block₂, 1) : 1
 end
 
-# Base.show(io::IO, x::ThreeBlockMatrix) = print(io, "ThreeBlockMatrix")
+Base.real(x::ThreeBlockMatrix) =
+    ThreeBlockMatrix(real(x.block₁), real(x.block₂), real(x.block₃))
+Base.imag(x::ThreeBlockMatrix) =
+    ThreeBlockMatrix(imag(x.block₁), imag(x.block₂), imag(x.block₃))
 
-function Base.convert(::Type{M₁}, x::ThreeBlockMatrix{M₂}) where {M₁, M₂ <: M₁}
+Base.show(io::IO, x::ThreeBlockMatrix) = print(io, "ThreeBlockMatrix")
+
+function Base.convert(::Type{M₁}, x::ThreeBlockMatrix{T, M₂}) where {M₁, T, M₂ <: M₁}
     N = size(x.block₁, 1) + size(x.block₂, 1)
     n₁ = size(x.block₂, 1)
     n₂ = size(x.block₃, 2)
@@ -46,6 +114,18 @@ end
 
 Adapt.adapt_structure(to, x::ThreeBlockMatrix) =
     ThreeBlockMatrix(adapt(to, x.block₁), adapt(to, x.block₂), adapt(to, x.block₃))
+
+@doc raw"""
+    sparsity(x::ThreeBlockMatrix)
+
+Get the fraction of zeros which are optimized away during GEMM.
+"""
+function sparsity(x::ThreeBlockMatrix)
+    N = size(x.block₁, 1) + size(x.block₂, 1)
+    n₁ = size(x.block₂, 1)
+    n₂ = size(x.block₃, 2)
+    (n₁^2 + n₂^2) / N^2
+end
 
 @doc raw"""
     ThreeBlockMatrix(G, n₁, n₂)
@@ -216,18 +296,130 @@ function LinearAlgebra.mul!(C::AbstractMatrix, A::AbstractMatrix, B::ThreeBlockM
     end
     n₁ = size(B.block₂, 1)
     n₂ = size(B.block₃, 2)
-    mul!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):N), B.block₁, α, β)
+    _mul_with_strides!(
+        view(C, :, 1:size(B.block₁, 2)),
+        view(A, :, (n₁ + 1):N),
+        B.block₁,
+        α,
+        β,
+    )
     if n₁ > 0
         # NOTE: If n₁ is zero, then A B α + C β amount to C β, and since β is 1 we can drop
         # it altogerher.
         #! format: off
-        mul!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
+        _mul_with_strides!(view(C, :, (n₁ + 1):size(B.block₁, 2)), view(A, :, 1:n₁), B.block₂, α, one(eltype(C)))
         #! format: on
     end
     if n₂ > 0
         #! format: off
-        mul!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
+        _mul_with_strides!(view(C, :, (size(B.block₁, 2) + 1):size(C, 2)), view(A, :, 1:size(B.block₁, 2)), B.block₃, α, β)
         #! format: on
     end
     return C
+end
+
+dot_batched(A, B) = dot_batched!(similar(A, size(A, 1)), A, B)
+function dot_batched!(
+    out::StridedVector{T},
+    A::StridedMatrix{T},
+    B::StridedMatrix{T},
+) where {T}
+    if size(A) != size(B)
+        throw(DimensionMismatch("Dimensions of 'A' and 'B' do not match: $(size(A)) != $(size(B))"))
+    end
+    if length(out) != size(A, 1)
+        throw(DimensionMismatch("'out' has wrong length: $(length(out)); expected $(size(A, 1))"))
+    end
+    (n, m) = size(A)
+    fill!(out, zero(T))
+    @inbounds for j in 1:m
+        @simd for i in 1:n
+            out[i] += conj(A[i, j]) * B[i, j]
+        end
+    end
+    out
+end
+
+function dot_kernel_batched!(
+    batch_size,
+    n,
+    out::CuDeviceMatrix{T},
+    _A::CuDeviceMatrix{T},
+    _B::CuDeviceMatrix{T},
+) where {T}
+    A = CUDA.Const(_A)
+    B = CUDA.Const(_B)
+    block_acc = @cuDynamicSharedMem(T, (blockDim().x, blockDim().y))
+    # Initialize block_acc for each block within the "first grid"
+    if blockIdx().x <= gridDim().x && blockIdx().y <= gridDim().y
+        @inbounds block_acc[threadIdx().x, threadIdx().y] = zero(T)
+    end
+
+    # Perform thread-local accumulation in each block
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+    if i <= batch_size
+        thread_acc = zero(T)
+        @inbounds while j <= n
+            thread_acc += conj(A[i, j]) * B[i, j]
+            j += blockDim().y * gridDim().y
+        end
+        @inbounds block_acc[threadIdx().x, threadIdx().y] += thread_acc
+    end
+    sync_threads()
+
+    # Reduction within each block
+    stride = blockDim().y
+    while stride > 1
+        stride >>= 1
+        if threadIdx().y <= stride
+            @inbounds block_acc[threadIdx().x, threadIdx().y] +=
+                block_acc[threadIdx().x, threadIdx().y + stride]
+        end
+        sync_threads()
+    end
+    if i <= batch_size && threadIdx().y == 1
+        @inbounds out[i, blockIdx().y] = block_acc[threadIdx().x, 1]
+    end
+    nothing
+end
+function dot_batched!(
+    out::StridedCuVector{T},
+    A::StridedCuMatrix{T},
+    B::StridedCuMatrix{T},
+) where {T}
+    if size(A) != size(B)
+        throw(DimensionMismatch("Dimensions of 'A' and 'B' do not match: $(size(A)) != $(size(B))"))
+    end
+    if length(out) != size(A, 1)
+        throw(DimensionMismatch("'out' has wrong length: $(length(out)); expected $(size(A, 1))"))
+    end
+    (n, m) = size(A)
+    function num_threads(threads)
+        threads_y = 32
+        threads_x = div(threads, threads_y)
+        threads_x, threads_y
+    end
+    num_blocks(threads) = cld.(size(A), threads)
+    amount_shmem(threads) = prod(threads) * sizeof(T)
+    @assert stride(A, 1) == 1 && stride(B, 1) == 1
+    _A = CuArray{T, 2}(Base.unsafe_convert(CuPtr{Nothing}, A), (stride(A, 2), size(A, 2)))
+    _B = CuArray{T, 2}(Base.unsafe_convert(CuPtr{Nothing}, B), (stride(B, 2), size(B, 2)))
+    kernel = @cuda launch = false dot_kernel_batched!(n, m, _A, _A, _B)
+    config = launch_configuration(kernel.fun, shmem = amount_shmem)
+    threads = num_threads(config.threads)
+    blocks = num_blocks(threads)
+    shmem = amount_shmem(threads)
+    temp = similar(A, n, blocks[2])
+    GC.@preserve A B kernel(
+        n,
+        m,
+        temp,
+        _A,
+        _B;
+        threads = threads,
+        blocks = blocks,
+        shmem = shmem,
+    )
+    sum!(out, temp)
 end

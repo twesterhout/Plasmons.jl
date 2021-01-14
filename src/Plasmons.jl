@@ -42,7 +42,7 @@ Fermi-Dirac distribution is just a constant and ``G`` goes to 0 for all ``\omega
 [`Plasmons._g_blocks`](@ref) uses this fact to construct a block-sparse version of
 ``G``. The reason why such a block-sparse version is useful will become apparent later.
 """
-function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+function _build_g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
     # Compared to a simple `map` the following saves one allocation
     f = similar(E)
     map!(x -> fermidirac(x, mu = mu, kT = kT), f, E)
@@ -53,8 +53,40 @@ function _g(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where 
     end
     return G
 end
-_g(ħω::Complex{ℝ}, E::CuVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real} =
-    CuArray(_g(ħω, Vector(E); mu = mu, kT = kT))
+function _postprocess_g(
+    ::Type{T},
+    G::AbstractMatrix,
+    blocks::Bool,
+) where {T <: Union{Real, Complex}}
+    split_if(x) = T <: Real ? (real(x), imag(x)) : x
+    compress_if(x) = blocks ? ThreeBlockMatrix(x) : x
+    return _map_tuple(compress_if, split_if(G))
+end
+function _map_tuple(f::Function, x::Tuple)
+    # @info "_map_tuple($f, $x::Tuple) = "
+    f.(x)
+end
+_map_tuple(f::Function, x::Any) = f(x)
+
+g_matrix(
+    ::Type{T},
+    ħω::Complex{ℝ},
+    E::Vector{ℝ};
+    mu::ℝ,
+    kT::ℝ,
+    blocks::Bool,
+) where {T, ℝ <: Real} = _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
+function g_matrix(
+    ::Type{T},
+    ħω::Complex{ℝ},
+    E::CuVector{ℝ};
+    mu::ℝ,
+    kT::ℝ,
+    blocks::Bool,
+) where {T, ℝ <: Real}
+    G = _postprocess_g(T, _build_g(ħω, Vector(E); mu = mu, kT = kT), blocks)
+    T <: Real ? (adapt(CuArray, G[1]), adapt(CuArray, G[2])) : adapt(CuArray, G)
+end
 
 @doc raw"""
     _g_blocks(ħω, E; mu, kT) -> (Gᵣ, Gᵢ)
@@ -70,15 +102,15 @@ Compared to [`_g`](@ref) this function applies to tricks:
   * We exploit the "block-sparse" structure of `G` (see
     [`Plasmons._ThreeBlockMatrix`](@ref)).
 """
-function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
-    G = _g(ħω, E; mu = mu, kT = kT)
-    # TODO(twesterhout): Are these extra copies important?
-    ThreeBlockMatrix(real(G)), ThreeBlockMatrix(imag(G))
-end
-function _g_blocks(ħω::Complex{ℝ}, E::CuVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
-    (Gᵣ, Gᵢ) = _g_blocks(ħω, Vector(E); mu = mu, kT = kT)
-    adapt(CuArray, Gᵣ), adapt(CuArray, Gᵢ)
-end
+# function _g_blocks(ħω::Complex{ℝ}, E::AbstractVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+#     G = _g(ħω, E; mu = mu, kT = kT)
+#     # TODO(twesterhout): Are these extra copies important?
+#     ThreeBlockMatrix(real(G)), ThreeBlockMatrix(imag(G))
+# end
+# function _g_blocks(ħω::Complex{ℝ}, E::CuVector{ℝ}; mu::ℝ, kT::ℝ) where {ℝ <: Real}
+#     (Gᵣ, Gᵢ) = _g_blocks(ħω, Vector(E); mu = mu, kT = kT)
+#     adapt(CuArray, Gᵣ), adapt(CuArray, Gᵢ)
+# end
 
 @doc raw"""
     polarizability(ħω, E, ψ; mu, kT, method = :batched) -> χ
@@ -110,223 +142,91 @@ temporary arrays. Stores two attributes:
   * A vector `A` which is defined by ``A_j = \langle j | a \rangle \langle b | j \rangle``.
   * A vector `temp` which is the product ``G A``.
 """
-struct _Workspace{T₁ <: AbstractArray, T₂ <: AbstractArray}
-    A::T₁
-    temp::T₂
+struct Workspace{M <: AbstractMatrix}
+    A::M
+    temp::M
 end
 
-polarizability_batched(ħω, E, ψ; mu, kT) =
-    _polarizability_batched(_g_blocks(ħω, E; mu = mu, kT = kT)..., ψ)
+function polarizability_batched(
+    ħω::Complex,
+    E::AbstractVector{ℝ},
+    ψ::AbstractMatrix{ℂ};
+    mu::Real,
+    kT::Real,
+    blocks::Bool,
+) where {ℝ <: Real, ℂ <: Union{ℝ, Complex{ℝ}}}
+    G = g_matrix(ℂ, ħω, E; mu = mu, kT = kT, blocks = blocks)
+    ℂ <: Real ? polarizability_batched(G[1], G[2], ψ) : polarizability_batched(G, ψ)
+end
 
-function _polarizability_batched(Gᵣ, Gᵢ, ψ::AbstractMatrix{T}) where {T <: Real}
-    χ = similar(ψ, complex(T))
+function polarizability_batched(
+    Gᵣ::Union{AbstractMatrix{ℝ}, ThreeBlockMatrix{ℝ}},
+    Gᵢ::Union{AbstractMatrix{ℝ}, ThreeBlockMatrix{ℝ}},
+    ψ::AbstractMatrix{ℝ},
+) where {ℝ <: Real}
+    N = size(ψ, 1)
+    χ = similar(ψ, complex(ℝ))
     fill!(χ, zero(eltype(χ)))
-    ws = _Workspace(similar(ψ), similar(ψ))
-    for b in 1:size(ψ, 2)
-        a = b:size(ψ, 1)
-        # BANG! view of χ is allocated on the heap...
+    ws = Workspace(similar(ψ), similar(ψ))
+    for b in 1:N
+        a = b:N
         _batched_mat_el!(view(χ, a, b), ws, a, b, Gᵣ, Gᵢ, ψ)
     end
-    for b in 2:size(ψ, 2)
-        for a in 1:(b - 1)
-            @inbounds χ[a, b] = χ[b, a]
-        end
+    χ .= 2 .* (χ .+ transpose(χ))
+    χ[diagind(χ)] ./= 2
+    χ
+end
+function polarizability_batched(
+    G::Union{AbstractMatrix{ℂ}, ThreeBlockMatrix{ℂ}},
+    ψ::AbstractMatrix{ℂ},
+) where {ℂ <: Complex}
+    N = size(ψ, 1)
+    χ = similar(ψ)
+    fill!(χ, zero(eltype(χ)))
+    ws = Workspace(similar(ψ), similar(ψ))
+    for b in 1:N
+        _batched_mat_el!(view(χ, :, b), ws, b, G, ψ)
     end
-    return χ
+    χ .*= 2
+    χ
 end
 
-function _compute_A!(
-    out::AbstractMatrix{ℂ},
+function _batched_mat_el!(
+    out::AbstractVector{Complex{ℝ}},
+    ws,
     as::UnitRange{Int},
     b::Int,
-    ψ::AbstractMatrix{ℂ},
-) where {ℂ <: Union{Real, Complex}}
-    out .= view(ψ, as, :) .* transpose(view(ψ, b, :))
-    # Previously, we had an explicit loop on CPU, but the above expression compiles the
-    # pretty much same code and works on GPU.
-    # Old loop (kept here for reference):
-    # offset = as.start - 1
-    # @inbounds for j in 1:size(ψ, 2)
-    #     scale = conj(ψ[b, j])
-    #     @simd for a in as
-    #         out[a - offset, j] = scale * ψ[a, j]
-    #     end
-    # end
-end
-
-_dot_many!(out, A, B, scale) = _dot_many_loops!(out, A, B, complex(scale))
-
-_dot_many_loops(A, B) = _dot_many_loops!(similar(A, size(A, 1)), A, B)
-function _dot_many_loops!(
-    out::AbstractVector,
-    A::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    scale::Complex{T} = complex(one(T)),
-) where {T}
-    @inbounds for j in 1:size(A, 2)
-        @simd for i in 1:length(out)
-            out[i] += scale * A[i, j] * B[i, j]
-        end
-    end
+    Gᵣ::Union{AbstractMatrix{ℝ}, ThreeBlockMatrix{ℝ}},
+    Gᵢ::Union{AbstractMatrix{ℝ}, ThreeBlockMatrix{ℝ}},
+    ψ::AbstractMatrix{ℝ},
+) where {ℝ <: Real}
+    batch_size = length(as)
+    A = view(ws.A, 1:batch_size, :)
+    temp = view(ws.temp, 1:batch_size, :)
+    A .= view(ψ, as, :) .* transpose(view(ψ, b, :))
+    # @info "" typeof(temp) typeof(A) typeof(Gᵣ)
+    _mul_with_strides!(temp, A, Gᵣ, one(ℝ), zero(ℝ))
+    outᵣ = view(reinterpret(ℝ, out), 1:2:(2 * batch_size))
+    dot_batched!(outᵣ, A, temp)
+    _mul_with_strides!(temp, A, Gᵢ, one(ℝ), zero(ℝ))
+    outᵢ = view(reinterpret(ℝ, out), 2:2:(2 * batch_size))
+    dot_batched!(outᵢ, A, temp)
     out
 end
-
-dot_batched_simple(A, B) = sum(A .* B, dims = 2)
-function dot_batched_simple!(
-    out::AbstractVector,
-    A::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-) where {T}
-    copy!(out, dot_batched_simple(A, B))
-end
-
-function dot_kernel!(
-    n,
-    out::CuDeviceVector{T},
-    _A::CuDeviceVector{T},
-    _B::CuDeviceVector{T},
-) where {T}
-    A = CUDA.Const(_A)
-    B = CUDA.Const(_B)
-    block_acc = @cuDynamicSharedMem(T, blockDim().x)
-    # Initialize block_acc for each block within the "first grid"
-    if blockIdx().x <= gridDim().x
-        block_acc[threadIdx().x] = zero(T)
-    end
-
-    # Perform thread-local accumulation in each block
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    thread_acc = zero(T)
-    while i <= n
-        thread_acc += A[i] * B[i]
-        i += blockDim().x * gridDim().x
-    end
-    block_acc[threadIdx().x] += thread_acc
-    sync_threads()
-
-    # Reduction within each block
-    stride = blockDim().x
-    while stride > 1
-        stride >>= 1
-        if threadIdx().x <= stride
-            block_acc[threadIdx().x] += block_acc[threadIdx().x + stride]
-        end
-        sync_threads()
-    end
-    if threadIdx().x == 1
-        out[blockIdx().x] = block_acc[1]
-    end
-    nothing
-end
-function dot_cuda(A::CuVector{T}, B::CuVector{T}) where {T}
-    n = length(A)
-    num_threads(threads) = prevpow(2, threads)
-    num_blocks(threads) = div(n + threads - 1, threads)
-    amount_shmem(threads) = threads * sizeof(T)
-    kernel = @cuda launch = false dot_kernel!(n, A, A, B)
-    config = launch_configuration(kernel.fun, shmem = amount_shmem)
-    threads = num_threads(config.threads)
-    blocks = num_blocks(threads)
-    shmem = amount_shmem(threads)
-    out = similar(A, blocks)
-    kernel(n, out, A, B; threads = threads, blocks = blocks, shmem = shmem)
-    sum(out, dims = 1)
-end
-
-function dot_kernel_batched!(
-    batch_size,
-    n,
-    out::CuDeviceMatrix{T},
-    _A::CuDeviceMatrix{T},
-    _B::CuDeviceMatrix{T},
-) where {T}
-    A = CUDA.Const(_A)
-    B = CUDA.Const(_B)
-    block_acc = @cuDynamicSharedMem(T, (blockDim().x, blockDim().y))
-    # Initialize block_acc for each block within the "first grid"
-    if blockIdx().x <= gridDim().x && blockIdx().y <= gridDim().y
-        block_acc[threadIdx().x, threadIdx().y] = zero(T)
-    end
-
-    # Perform thread-local accumulation in each block
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
-    if i <= batch_size
-        thread_acc = zero(T)
-        while j <= n
-            thread_acc += A[i, j] * B[i, j]
-            j += blockDim().y * gridDim().y
-        end
-        block_acc[threadIdx().x, threadIdx().y] += thread_acc
-    end
-    sync_threads()
-
-    # Reduction within each block
-    stride = blockDim().y
-    while stride > 1
-        stride >>= 1
-        if threadIdx().y <= stride
-            block_acc[threadIdx().x, threadIdx().y] +=
-                block_acc[threadIdx().x, threadIdx().y + stride]
-        end
-        sync_threads()
-    end
-    if i <= batch_size && threadIdx().y == 1
-        out[i, blockIdx().y] = block_acc[threadIdx().x, 1]
-    end
-    nothing
-end
-function dot_batched_cuda!(
-    out::AbstractVector{T},
-    A::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-) where {T}
-    function num_threads(threads)
-        threads_x = 64
-        threads_y = prevpow(2, div(threads, threads_x))
-        threads_x, threads_y
-    end
-    num_blocks(threads) = cld.((size(A, 1), size(A, 2)), threads)
-    amount_shmem(threads) = prod(threads) * sizeof(T)
-    kernel = @cuda launch = false dot_kernel_batched!(size(A, 1), size(A, 2), A, A, B)
-    config = launch_configuration(kernel.fun, shmem = amount_shmem)
-    threads = num_threads(config.threads)
-    blocks = num_blocks(threads)
-    shmem = amount_shmem(threads)
-    temp = similar(A, size(A, 1), blocks[2])
-    kernel(
-        size(A, 1),
-        size(A, 2),
-        temp,
-        A,
-        B;
-        threads = threads,
-        blocks = blocks,
-        shmem = shmem,
-    )
-    sum!(out, temp)
-end
-dot_batched_cuda(A, B) = dot_batched_cuda!(similar(A, size(A, 1)), A, B)
-
-
-
-
-@noinline function _batched_mat_el!(
-    out::AbstractVector,
-    ws::_Workspace{<:AbstractMatrix},
-    as::UnitRange{Int},
+function _batched_mat_el!(
+    out::AbstractVector{ℂ},
+    ws,
     b::Int,
-    Gᵣ,
-    Gᵢ,
-    ψ,
-)
-    A = view(ws.A, 1:length(as), :) # BANG! Allocated on the heap...
-    temp = view(ws.temp, 1:length(as), :) # BANG! Allocated on the heap...
-    _compute_A!(A, as, b, ψ)
-    mul!(temp, A, Gᵣ)
-    _dot_many!(out, A, temp, 2.0)
-    mul!(temp, A, Gᵢ)
-    _dot_many!(out, A, temp, 2.0im)
+    G::Union{AbstractMatrix{ℂ}, ThreeBlockMatrix{ℂ}},
+    ψ::AbstractMatrix{ℂ},
+) where {ℂ <: Complex}
+    A = ws.A
+    temp = ws.temp
+    A .= ψ .* conj.(transpose(view(ψ, b, :)))
+    # @info "" A G
+    _mul_with_strides!(temp, A, G, one(ℂ), zero(ℂ))
+    dot_batched!(out, A, temp)
+    out
 end
 
 
@@ -351,7 +251,7 @@ function polarizability_simple(
             "expected ψ to be a square matrix of the same dimension as E",
         ))
     end
-    G = _g(ħω, E; mu = mu, kT = kT)
+    G = _build_g(ħω, E; mu = mu, kT = kT)
     χ = similar(G)
     @inbounds for a in 1:size(χ, 2)
         for b in 1:size(χ, 1)

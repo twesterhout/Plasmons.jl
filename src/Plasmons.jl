@@ -8,6 +8,10 @@ using Adapt
 using LinearAlgebra
 using ArgParse
 using HDF5
+using Dates
+using Logging
+using LoggingExtras
+
 
 include("utilities.jl")
 
@@ -71,14 +75,8 @@ products containing it. To return ``G`` in block-sparse form, set `block = true`
 This function works with both CPU and GPU arrays. If vector `E` is stored on the GPU, then
 the returned matrix (or all submatrices for block-sparse version) will also reside on GPU.
 """
-g_matrix(
-    ::Type{T},
-    ħω::Complex{ℝ},
-    E::Vector{ℝ};
-    mu::ℝ,
-    kT::ℝ,
-    blocks::Bool,
-) where {T, ℝ <: Real} = _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
+g_matrix(::Type{T}, ħω::Complex{ℝ}, E::Vector{ℝ}; mu::ℝ, kT::ℝ, blocks::Bool) where {T, ℝ <: Real} =
+    _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
 g_matrix(
     ::Type{T},
     ħω::Complex{ℝ},
@@ -267,101 +265,6 @@ function dielectric(χ::AbstractMatrix{Complex{ℝ}}, V::AbstractMatrix{ℝ}) wh
     mul!(ε, V, χ, -one(ℂ), one(ℂ))
     return ε
 end
-
-
-@doc raw"""
-    coulomb_simple(x, y, z; V₀) -> V
-
-Given site coordinates (as vectors of real numbers) construct the simplest approximation of
-Coulomb interaction potential:
-```math
-    V_{ab} = \left\{ \begin{aligned}
-        &\frac{e^2}{4\pi \varepsilon_0} \frac{1}{|\mathbf{r}_a - \mathbf{r}_b|},
-            \text{ when } a \neq b \\
-        &V_0, \text{ otherwise}
-    \end{aligned} \right.
-```
-Coordinates are assumed to be in meters, `V₀` -- in electron-volts, and the returned matrix
-is also in electron-volts.
-
-Note, that electron charge ``e > 0`` in the above formula.
-"""
-# function coulomb_simple(
-#     x::AbstractVector{ℝ},
-#     y::AbstractVector{ℝ},
-#     z::AbstractVector{ℝ};
-#     V₀::ℝ,
-# ) where {ℝ <: Real}
-#     e = 1.602176634E-19 # [C], from https://en.wikipedia.org/wiki/Elementary_charge
-#     ε₀ = 8.8541878128E-12 # [F/m], from https://en.wikipedia.org/wiki/Vacuum_permittivity
-#     # NOTE: `scale` contains the first power of `e`. THIS IS NOT A MISTAKE!
-#     # [e / ε₀] = C * m / F= C * m / (C / V) = V * m, and dividing by distance we get volts.
-#     # And since we work in electron-volts the second multiplication with e is implicit.
-#     scale = ℝ(e / (4 * π * ε₀))
-#     n = length(x)
-#     if length(y) != n || length(z) != n
-#         throw(DimensionMismatch(
-#             "coordinates have diffent lengths: length(x)=$(length(x)), " *
-#             "length(y)=$(length(y)), length(z)=$(length(z))",
-#         ))
-#     end
-#     distance = let x = x, y = y, z = z
-#         (i, j) -> hypot(x[i] - x[j], y[i] - y[j], z[i] - z[j])
-#     end
-#
-#     v = similar(x, n, n)
-#     @inbounds v[diagind(v)] .= V₀
-#     @inbounds for b in 1:(n - 1)
-#         for a in (b + 1):n
-#             v[a, b] = scale / distance(a, b)
-#             v[b, a] = v[a, b]
-#         end
-#     end
-#     return v
-# end
-
-# function _momentum_eigenvectors(q::NTuple{3, <:Real}, x, y, z; n::Int)
-#     ks = 0:(π / (n - 1)):π
-#     @assert length(ks) == n
-#     out = similar(x, complex(eltype(x)), length(x), length(ks))
-#     for i in 1:size(out, 2)
-#         fn = let kˣ = q[1] * ks[i], kʸ = q[2] * ks[i], kᶻ = q[3] * ks[i]
-#             (xᵢ, yᵢ, zᵢ) -> exp(1im * (kˣ * xᵢ + kʸ * yᵢ + kᶻ * zᵢ))
-#         end
-#         map!(fn, view(out, :, i), x, y, z)
-#     end
-#     out
-# end
-# function _dispersion_function(
-#     q::NTuple{3, ℝ},
-#     x::AbstractVector{ℝ},
-#     y::AbstractVector{ℝ},
-#     z::AbstractVector{ℝ};
-#     n::Int,
-# ) where {ℝ <: Real}
-#     if length(x) != length(y) || length(x) != length(z)
-#         throw(DimensionMismatch("'x', 'y', and 'z' have different lengths: $(length(x)) vs. $(length(y)) vs. $(length(z))"))
-#     end
-#     return let ks = _momentum_eigenvectors(q, x, y, z; n = n),
-#         temp = similar(ks, length(x), size(ks, 2))
-#
-#         (out, ε) -> begin
-#             mul!(temp, ε, ks)
-#             for i in 1:length(out)
-#                 out[i] = dot(view(ks, :, i), view(temp, :, i))
-#             end
-#         end
-#     end
-# end
-# function dispersion(εs, q, x, y, z; n::Int = 100)
-#     fn! = _dispersion_function(q, x, y, z; n = n)
-#     out = similar(x, complex(eltype(x)), length(εs), n)
-#     for (i, ε) in enumerate(εs)
-#         fn!(view(out, i, :), ε)
-#     end
-#     out
-# end
-
 function main(
     E::Vector{ℝ},
     ψ::Matrix{ℂ};
@@ -391,6 +294,9 @@ function main(
         ψ = factorization.vectors
         @info "Diagonalization completed"
     end
+    attrs(out)["kT"] = kT
+    attrs(out)["μ"] = μ
+    attrs(out)["η"] = η
     group_χ = g_create(out, "χ")
     group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : g_create(out, "ε")
     @info "Polarizability matrices χ(ω) will be saved to group 'χ'"
@@ -403,13 +309,7 @@ function main(
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
-        χ = polarizability_batched(
-            convert(complex(ℝ), ω),
-            E,
-            ψ;
-            mu = convert(ℝ, μ),
-            kT = convert(ℝ, kT),
-        )
+        χ = polarizability(convert(complex(ℝ), ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
         group_χ[name] = χ
         attrs(group_χ[name])["ħω"] = ω
         flush(group_χ)
@@ -486,7 +386,15 @@ function tryread(io::HDF5.File, path::Union{<:AbstractString, Nothing} = nothing
     read(io, path)
 end
 
+const date_format = "yyyy-mm-dd HH:MM:SS"
+
+timestamp_logger(logger) =
+    TransformerLogger(logger) do log
+        merge(log, (; message = "$(Dates.format(now(), date_format))  $(log.message)"))
+    end
+
 function julia_main()::Cint
+    ConsoleLogger(stdout, Logging.Debug) |> timestamp_logger |> global_logger
     args = _parse_commandline()
     H, E, ψ, V = h5open(args[:input_file], "r") do io
         tryread(io, get(args, :hamiltonian, nothing)),

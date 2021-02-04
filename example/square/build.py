@@ -1,3 +1,4 @@
+import argparse
 import math
 import h5py
 import numpy as np
@@ -5,7 +6,7 @@ import scipy.sparse
 import tipsi
 
 
-def square(width: int, a: float, t: float, periodic: bool) -> tipsi.builder.Sample:
+def square(width: int, a: float, t: float, periodic: bool) -> tipsi.Sample:
     vectors = [[a, 0, 0], [0, a, 0]]
     orbital_coords = [[0, 0, 0]]
     lattice = tipsi.builder.Lattice(vectors, orbital_coords)
@@ -63,16 +64,31 @@ def get_coulomb(sample: tipsi.Sample, v0: float) -> np.ndarray:
     return v
 
 
-def main():
-    n = 10
-    # Graphene parameters, but square lattice :P
-    sample = square(n, a=0.246e-9, t=2.8, periodic=False)
-    with h5py.File("square_sheet_{}x{}.h5".format(n, n), "w") as f:
+def generate_input_for_julia(filename: str, n: int, a: float, t: float):
+    """Generate HDF5 which can be fed to `Plasmons.jl`.
+
+    :param filename: Path to output HDF5 file.
+    :param n: Width/height of the sample. We always create square samples.
+    :param a: Lattice constant in Å (Angstrom).
+    :param t: Hopping parameter in eV.
+    """
+    assert n > 1
+    assert a > 0
+    sample = square(n, a=a, t=t, periodic=False)
+    with h5py.File(filename, "w") as f:
         f.create_dataset("H", data=get_hamiltonian(sample))
-        f.create_dataset("V", data=get_coulomb(sample, v0=15.78))
-        f.create_dataset("x", data=sample.site_x)
-        f.create_dataset("y", data=sample.site_y)
-        f.create_dataset("z", data=sample.site_z)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate tight-binding Hamiltonian for square lattice."
+    )
+    parser.add_argument("-n", type=int, help="Width/height of the sample.")
+    parser.add_argument("-a", type=float, default=2.46, help="Lattice constant in Å.")
+    parser.add_argument("-t", type=float, default=2.7, help="Hopping parameter in eV.")
+    parser.add_argument("filename", type=str, help="Path to output HDF5 file.")
+    args = parser.parse_args()
+    generate_input_for_julia(args.filename, args.n, args.a, args.t)
 
 
 if __name__ == "__main__":

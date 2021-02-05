@@ -381,7 +381,7 @@ end
 
 function tryread(io::HDF5.File, path::Union{<:AbstractString, Nothing} = nothing)
     isnothing(path) && return nothing
-    if !has(io, path)
+    if !haskey(io, path)
         @warn "Path '$path' not found in input HDF5 file"
         return nothing
     end

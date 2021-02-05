@@ -265,6 +265,8 @@ function dielectric(χ::AbstractMatrix{Complex{ℝ}}, V::AbstractMatrix{ℝ}) wh
     mul!(ε, V, χ, -one(ℂ), one(ℂ))
     return ε
 end
+
+
 function main(
     E::Vector{ℝ},
     ψ::Matrix{ℂ};

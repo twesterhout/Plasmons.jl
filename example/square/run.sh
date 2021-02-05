@@ -1,5 +1,6 @@
 #!/bin/sh
 trap '{ rm "$input_file"; }' EXIT
+set -e
 
 export OMP_NUM_THREADS=4
 a=2.46                        # Lattice constant in Å

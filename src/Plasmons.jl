@@ -296,11 +296,11 @@ function main(
         ψ = factorization.vectors
         @info "Diagonalization completed"
     end
-    attrs(out)["kT"] = kT
-    attrs(out)["μ"] = μ
-    attrs(out)["η"] = η
-    group_χ = g_create(out, "χ")
-    group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : g_create(out, "ε")
+    HDF5.attributes(out)["kT"] = kT
+    HDF5.attributes(out)["μ"] = μ
+    HDF5.attributes(out)["η"] = η
+    group_χ = create_group(out, "χ")
+    group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
     @info "Polarizability matrices χ(ω) will be saved to group 'χ'"
     if !isnothing(V)
         @info "Dielectric functions ε(ω) will be saved to group 'ε'"
@@ -313,11 +313,11 @@ function main(
         name = string(i, pad = 4)
         χ = polarizability(convert(complex(ℝ), ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
         group_χ[name] = χ
-        attrs(group_χ[name])["ħω"] = ω
+        HDF5.attributes(group_χ[name])["ħω"] = ω
         flush(group_χ)
         if !isnothing(V)
             group_ε[name] = dielectric(χ, V)
-            attrs(group_ε[name])["ħω"] = ω
+            HDF5.attributes(group_ε[name])["ħω"] = ω
             flush(group_ε)
         end
     end

@@ -13,4 +13,4 @@ From: julia:1.5-buster
     julia -e 'import Plasmons'
 
 %runscript
-    julia -e 'import Plasmons; Plasmons.julia_main()' -- "$@"
+    julia -O3 -e 'import Plasmons; Plasmons.julia_main()' -- "$@"

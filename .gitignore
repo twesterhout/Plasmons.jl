@@ -1,8 +1,10 @@
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
+*input*.h5
 *output*.h5
 *result*.h5
+*.sif
 .DS_Store
 /Manifest.toml
 /dev/

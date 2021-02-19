@@ -1,0 +1,15 @@
+name: tipsi_devel
+channels:
+  - defaults
+  - twesterhout
+dependencies:
+  - python
+  - pip
+  - pip:
+    - pynvim
+    - black
+  - numpy
+  - scipy
+  - matplotlib
+  - h5py
+  - tipsi

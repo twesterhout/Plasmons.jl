@@ -79,8 +79,14 @@ products containing it. To return ``G`` in block-sparse form, set `blocks = true
 This function works with both CPU and GPU arrays. If vector `E` is stored on the GPU, then
 the returned matrix (or all submatrices for block-sparse version) will also reside on GPU.
 """
-g_matrix(::Type{T}, ħω::Complex{ℝ}, E::Vector{ℝ}; mu::ℝ, kT::ℝ, blocks::Bool) where {T, ℝ <: Real} =
-    _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
+g_matrix(
+    ::Type{T},
+    ħω::Complex{ℝ},
+    E::Vector{ℝ};
+    mu::ℝ,
+    kT::ℝ,
+    blocks::Bool,
+) where {T, ℝ <: Real} = _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
 g_matrix(
     ::Type{T},
     ħω::Complex{ℝ},
@@ -331,16 +337,15 @@ function dispersion(As, q, x, y, z; n::Int = 100)
 end
 
 
-
 function main(
-    E::Vector{ℝ},
-    ψ::Matrix{ℂ};
+    E::AbstractVector{ℝ},
+    ψ::AbstractMatrix{ℂ};
     kT::Real,
     μ::Real,
     η::Real,
     ωs::Vector{<:Real},
     out::Union{HDF5.File, HDF5.Group},
-    V::Union{Matrix{ℝ}, Nothing} = nothing,
+    V::Union{AbstractMatrix{ℝ}, Nothing} = nothing,
 ) where {ℝ <: Real, ℂ <: Union{ℝ, Complex{ℝ}}}
     if kT <= 0
         throw(ArgumentError("invalid 'kT': $kT; expected a positive real number"))
@@ -363,22 +368,29 @@ function main(
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
-        χ = polarizability(convert(complex(ℝ), ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
-        group_χ[name] = χ
+        χ = @timed Array(polarizability(
+            convert(complex(ℝ), ω),
+            E,
+            ψ;
+            mu = convert(ℝ, μ),
+            kT = convert(ℝ, kT),
+        ))
+        group_χ[name] = χ.value
         HDF5.attributes(group_χ[name])["ħω"] = ω
+        HDF5.attributes(group_χ[name])["time"] = χ.time
         flush(group_χ)
         if !isnothing(V)
-            group_ε[name] = dielectric(χ, V)
+            ε = @timed Array(dielectric(χ.value, V))
+            group_ε[name] = ε.value
             HDF5.attributes(group_ε[name])["ħω"] = ω
+            HDF5.attributes(group_ε[name])["time"] = ε.time
             flush(group_ε)
         end
     end
 end
-function main(H::Matrix{ℂ}; kwargs...) where {ℂ}
+function main!(H::AbstractMatrix{ℂ}; kwargs...) where {ℂ}
     @warn "Eigenvalues or eigenvectors not provided: diagonalizing the Hamiltonian..."
-    factorization = eigen(Hermitian(H))
-    E = factorization.values
-    ψ = factorization.vectors
+    E, ψ = _eigen!(Hermitian(H))
     @info "Diagonalization completed"
     main(E, ψ; kwargs...)
 end
@@ -420,6 +432,9 @@ function _parse_commandline()
         "--eigenvectors"
             help = "Path to eigenvectors matrix in the input HDF5 file"
             arg_type = String
+        "--cuda"
+            help = "Index of CUDA device to use"
+            arg_type = Int
         "input_file"
             help = "Input HDF5 file"
             required = true
@@ -448,7 +463,6 @@ timestamp_logger(logger) =
     end
 
 function julia_main()::Cint
-    ConsoleLogger(stdout, Logging.Debug) |> timestamp_logger |> global_logger
     args = _parse_commandline()
     H, E, ψ, V = h5open(args[:input_file], "r") do io
         tryread(io, get(args, :hamiltonian, nothing)),
@@ -461,6 +475,23 @@ function julia_main()::Cint
                " and eigenvectors 'ψ' must be provided"
         return 1
     end
+    cuda_device = args[:cuda]
+    if !isnothing(cuda_device)
+        @info "Setting CUDA device to $cuda_device..."
+        device!(cuda_device)
+        if !isnothing(H)
+            H = adapt(CuArray, H)
+        end
+        if !isnothing(E)
+            E = adapt(CuArray, E)
+        end
+        if !isnothing(ψ)
+            ψ = adapt(CuArray, ψ)
+        end
+        if !isnothing(V)
+            V = adapt(CuArray, V)
+        end
+    end
     h5open(args[:output_file], "w") do io
         kwargs = (
             kT = args[:kT],
@@ -470,10 +501,12 @@ function julia_main()::Cint
             out = io,
             V = V,
         )
-        if (isnothing(E) || isnothing(ψ))
-            main(H; kwargs...)
-        else
-            main(E, ψ; kwargs...)
+        with_logger(ConsoleLogger(stdout, Logging.Info) |> timestamp_logger) do
+            if (isnothing(E) || isnothing(ψ))
+                main!(H; kwargs...)
+            else
+                main(E, ψ; kwargs...)
+            end
         end
     end
     return 0

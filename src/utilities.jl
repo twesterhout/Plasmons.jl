@@ -429,3 +429,13 @@ function dot_batched!(
     )
     sum!(out, temp)
 end
+
+function _eigen!(A::Hermitian{T, CuArray{T, 2}}) where {T}
+    eigenvalues, eigenvectors = T <: Complex ? CUSOLVER.heevd!('V', A.uplo, A.data) :
+        CUSOLVER.syevd!('V', A.uplo, A.data)
+    return eigenvalues, eigenvectors
+end
+function _eigen!(A::Hermitian{T, Array{T, 2}}) where {T}
+    factorization = eigen!(A)
+    return factorization.values, factorization.vectors
+end

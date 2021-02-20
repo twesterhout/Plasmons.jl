@@ -64,7 +64,7 @@ def get_coulomb(sample: tipsi.Sample, v0: float) -> np.ndarray:
     return v
 
 
-def generate_input_for_julia(filename: str, n: int, a: float, t: float):
+def generate_input_for_julia(filename: str, n: int, a: float, t: float, v0: float):
     """Generate HDF5 which can be fed to `Plasmons.jl`.
 
     :param filename: Path to output HDF5 file.
@@ -74,9 +74,19 @@ def generate_input_for_julia(filename: str, n: int, a: float, t: float):
     """
     assert n > 1
     assert a > 0
+    # Convert a to meters
+    a *= 1e-10
     sample = square(n, a=a, t=t, periodic=False)
     with h5py.File(filename, "w") as f:
         f.create_dataset("H", data=get_hamiltonian(sample))
+        f.create_dataset("V", data=get_coulomb(sample, v0))
+        # Convert x, y, and z from meters to lattice constants
+        x = sample.site_x / a
+        y = sample.site_y / a
+        z = sample.site_z / a
+        f.create_dataset("x", data=x)
+        f.create_dataset("y", data=y)
+        f.create_dataset("z", data=z)
 
 
 def main():
@@ -86,9 +96,10 @@ def main():
     parser.add_argument("-n", type=int, help="Width/height of the sample.")
     parser.add_argument("-a", type=float, default=2.46, help="Lattice constant in Å.")
     parser.add_argument("-t", type=float, default=2.7, help="Hopping parameter in eV.")
+    parser.add_argument("-v0", type=float, default=15.78, help="Coulomb self interaction in eV.")
     parser.add_argument("filename", type=str, help="Path to output HDF5 file.")
     args = parser.parse_args()
-    generate_input_for_julia(args.filename, args.n, args.a, args.t)
+    generate_input_for_julia(args.filename, args.n, args.a, args.t, args.v0)
 
 
 if __name__ == "__main__":

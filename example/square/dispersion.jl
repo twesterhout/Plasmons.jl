@@ -4,13 +4,6 @@ using Plasmons
 using Plots
 
 pgfplotsx()
-theme(
-    :solarized_light;
-    fg = RGB(88 / 255, 110 / 255, 117 / 255),
-    fgtext = RGB(7 / 255, 54 / 255, 66 / 255),
-    fgguide = RGB(7 / 255, 54 / 255, 66 / 255),
-    fglegend = RGB(7 / 255, 54 / 255, 66 / 255),
-)
 
 function data_for_figure_1()
     x, y, z = h5open("input_square_sheet_32x32.h5", "r") do io
@@ -18,12 +11,12 @@ function data_for_figure_1()
     end
     matrix, ωs, qs = h5open("result_square_sheet_32x32.h5", "r") do io
         εs = (read(d) for d in io["/ε"])
-        ωs = map(d->real(read(attributes(d)["ħω"])), io["/ε"])
+        ωs = map(d -> real(read(attributes(d)["ħω"])), io["/ε"])
         n = 32 + 1
         qs = collect(0:(π / (n - 1)):π)
         direction = (1.0, 0.0, 0.0)
         # Each row corresponds to an ħω, each column -- to a q
-        matrix = dispersion(εs, map(q-> q .* direction, qs), x, y, z)
+        matrix = dispersion(εs, map(q -> q .* direction, qs), x, y, z)
         matrix, ωs, qs
     end
     h5open("dispersion_square_sheet_32x32.h5", "w") do io
@@ -35,14 +28,36 @@ function data_for_figure_1()
 end
 
 function figure_1()
-    matrix, ωs, qs = h5open("dispersion_square_sheet_32x32.h5", "r") do io
-        read(io["data"]), read(io["ħω"]), read(io["q"])
+    theme(
+        :solarized_light;
+        # fg = RGB(88 / 255, 110 / 255, 117 / 255),
+        fg = RGB(7 / 255, 54 / 255, 66 / 255),
+        fgtext = RGB(7 / 255, 54 / 255, 66 / 255),
+        fgguide = RGB(7 / 255, 54 / 255, 66 / 255),
+        fglegend = RGB(7 / 255, 54 / 255, 66 / 255),
+    )
+    χ, ε, ωs, qs = h5open("dispersion_square_sheet_32x32.h5", "r") do io
+        read(io["χ"]), read(io["ε"]), read(io["ħω"]), read(io["q"])
     end
     # Compute loss function
-    loss = @. -imag(1 / matrix)
-    loss = transpose(loss)
-    g = heatmap(qs, ωs, loss, ylims = (0, 15), xlabel = "q, 1/a", ylabel = "ħω, eV",
-                title = "-Im[1 / ε(q, ω)]")
-    savefig(g, "dispersion_square_sheet_32x32.png")
+    g₁ = heatmap(
+        qs,
+        ωs,
+        transpose(@. -imag(1 / ε)),
+        ylims = (0, 15),
+        xlabel = raw"$q$, $1/a$",
+        ylabel = raw"$\hbar\omega$, eV",
+        title = L"$-\mathrm{Im}\left[1 / \varepsilon(q, \omega) \right]$",
+    )
+    g₂ = heatmap(
+        qs,
+        ωs,
+        transpose(@. -imag(χ)),
+        ylims = (0, 15),
+        xlabel = nothing,
+        ylabel = nothing,
+        title = L"$-\mathrm{Im}\left[\chi(q, \omega)\right]$",
+    )
+    savefig(plot(g₁, g₂, size = (700, 350)), "dispersion_square_sheet_32x32.png")
     nothing
 end

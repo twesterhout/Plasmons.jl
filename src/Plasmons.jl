@@ -327,11 +327,13 @@ Calculate diagonal elements of the Fourier transform of matrix A.
 """
 function dispersion(As, q, x, y, z; n::Int = 100)
     fn! = _dispersion_function(q, x, y, z; n = n)
-    out = similar(x, complex(eltype(x)), length(εs), n)
+    matrix = Any[]
     for (i, A) in enumerate(As)
-        fn!(view(out, i, :), A)
+        out = similar(x, complex(eltype(x)), n)
+        fn!(out, A)
+        push!(matrix, out)
     end
-    out
+    hcat(matrix...)
 end
 
 

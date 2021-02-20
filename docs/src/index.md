@@ -37,10 +37,10 @@ of your system and can do all kind of interesting physics.
     This package allows you to compute ``\chi(\omega)`` and ``\varepsilon(\omega)``
     as efficiently as possible. Think of it as
     [BLAS](https://en.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) for
-    real-space RPA: writing matrix-matrix multiplication function is trivial and
-    everybody can do it, but good luck making it competitive with OpenBLAS or Intel
-    MKL! Same thing here: calculation of ``\chi(\omega)`` can be done in 10 lines of
-    code, but boy will it be slow! 😝
+    real-space RPA: writing matrix-matrix multiplication function is trivial,
+    but good luck making it competitive with OpenBLAS or Intel MKL! Same thing
+    here: calculation of ``\chi(\omega)`` can be done in 10 lines of code, but
+    boy will it be slow! 😝
 
 
 ## Installing
@@ -69,30 +69,37 @@ you are good to go.
 
 ## Example: square lattice
 
+This is a very simple example of using `Plasmons.jl` to calculate dielectric
+function of a square lattice sheet with periodic boundary conditions.
 
-## Using the executable
+All code for this example is located in
+[`examples/square`](https://github.com/twesterhout/Plasmons.jl/tree/master/example/square)
+folder.
 
-After downloading the container (`Plasmons.sif` file) from the
-[Releases](https://github.com/twesterhout/Plasmons.jl/releases) page one can
-simply run it. It follows the UNIX philosophy and tries to do one thing and do
-it well.
+### Generating input HDF5 file
 
-The one thing is calculating polarizability ``\chi`` (or dielectric function
-``\varepsilon``). It can be described by the following two functions:
+First, we need to generate the Hamiltonian for our system. For this we will use
+[TiPSi](http://www.edovanveen.com/tipsi/) Python package. There is a Conda
+environment file
+[`conda-tipsi.yml`](https://github.com/twesterhout/Plasmons.jl/tree/master/example/square/conda-tipsi.yml). So if you do not yet have TiPSi installed, run
 
-```math
-\begin{aligned}
-    \left(H, \omega, \mu, T\right) &\mapsto \chi \\
-    \left(\chi, V\right) &\mapsto \varepsilon
-\end{aligned}
+```sh
+conda env create --file conda-tipsi.yml # Creates tipsi_devel environment
+conda activate tipsi_devel # Now you have access to TiPSi
 ```
 
-This means that if you provide a Hamiltonian ``H`` and frequency ``\omega`` (and
-some information about the environment, namely chemical potential ``\mu`` and
-temperature ``T``), `Plasmons.sif` will compute ``\chi(\omega)`` for your
-system. If you additionally provide unscreened Coulomb interaction ``V``,
-`Plasmons.sif` will compute ``varepsilon(\omega)`` as well.
+We can not run `build.py`:
 
+```sh
+python3 build.py -n 10 input_square_10x10.h5
+```
+
+This will build the sample and write it to `input_square_10x10.h5` file. See the
+source of
+[`build.py`](https://github.com/twesterhout/Plasmons.jl/tree/master/example/square/build.py)
+for more info.
+
+**TODO:** Finish this
 
 
 ## Reference

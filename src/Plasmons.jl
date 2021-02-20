@@ -366,22 +366,32 @@ function main(
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
-        χ = @timed Array(polarizability(
+        t₀ = time_ns()
+        χ = polarizability(
             convert(complex(ℝ), ω),
             E,
             ψ;
             mu = convert(ℝ, μ),
             kT = convert(ℝ, kT),
-        ))
-        group_χ[name] = χ.value
+        )
+        if typeof(χ) <: CuArray
+            synchronize()
+        end
+        t₁ = time_ns()
+        group_χ[name] = Array(χ)
         HDF5.attributes(group_χ[name])["ħω"] = ω
-        HDF5.attributes(group_χ[name])["time"] = χ.time
+        HDF5.attributes(group_χ[name])["time"] = (t₁ - t₀) / 1e9
         flush(group_χ)
         if !isnothing(V)
-            ε = @timed Array(dielectric(χ.value, V))
-            group_ε[name] = ε.value
+            t₀ = time_ns()
+            ε = dielectric(χ, V)
+            if typeof(ε) <: CuArray
+                synchronize()
+            end
+            t₁ = time_ns()
+            group_ε[name] = Array(ε)
             HDF5.attributes(group_ε[name])["ħω"] = ω
-            HDF5.attributes(group_ε[name])["time"] = ε.time
+            HDF5.attributes(group_ε[name])["time"] = (t₁ - t₀) / 1e9
             flush(group_ε)
         end
     end
@@ -461,6 +471,7 @@ timestamp_logger(logger) =
     end
 
 function julia_main()::Cint
+    CUDA.allowscalar(false)
     args = _parse_commandline()
     H, E, ψ, V = h5open(args[:input_file], "r") do io
         tryread(io, get(args, :hamiltonian, nothing)),

@@ -279,37 +279,30 @@ end
 
 
 function _momentum_eigenvectors(
-    q::NTuple{3, ℝ},
+    qs::AbstractVector{NTuple{3, ℝ}},
     x::AbstractVector{ℝ},
     y::AbstractVector{ℝ},
     z::AbstractVector{ℝ};
-    n::Int,
 ) where {ℝ <: Real}
-    if n < 1
-        throw(ArgumentError("invalid number of points 'n': $n; expected a positive number"))
-    end
-    ks = 0:(π / (n - 1)):π
-    @assert length(ks) == n
-    out = similar(x, complex(eltype(x)), length(x), length(ks))
+    out = similar(x, complex(eltype(x)), length(x), length(qs))
     @inbounds for i in 1:size(out, 2)
-        fn = let kˣ = q[1] * ks[i], kʸ = q[2] * ks[i], kᶻ = q[3] * ks[i]
-            (xᵢ, yᵢ, zᵢ) -> exp(1im * (kˣ * xᵢ + kʸ * yᵢ + kᶻ * zᵢ))
+        fn = let (qˣ, qʸ, qᶻ) = qs[i]
+            (xᵢ, yᵢ, zᵢ) -> exp(1im * (qˣ * xᵢ + qʸ * yᵢ + qᶻ * zᵢ))
         end
         map!(fn, view(out, :, i), x, y, z)
     end
     out
 end
 function _dispersion_function(
-    q::NTuple{3, ℝ},
+    qs::AbstractVector{NTuple{3, ℝ}},
     x::AbstractVector{ℝ},
     y::AbstractVector{ℝ},
     z::AbstractVector{ℝ};
-    n::Int,
 ) where {ℝ <: Real}
     if length(x) != length(y) || length(x) != length(z)
         throw(DimensionMismatch("'x', 'y', and 'z' have different lengths: $(length(x)) vs. $(length(y)) vs. $(length(z))"))
     end
-    return let ks = _momentum_eigenvectors(q, x, y, z; n = n),
+    return let ks = _momentum_eigenvectors(qs, x, y, z),
         temp = similar(ks, length(x), size(ks, 2))
 
         (out, A) -> begin
@@ -325,11 +318,11 @@ end
 
 Calculate diagonal elements of the Fourier transform of matrix A.
 """
-function dispersion(As, q, x, y, z; n::Int = 100)
-    fn! = _dispersion_function(q, x, y, z; n = n)
+function dispersion(As, qs, x, y, z)
+    fn! = _dispersion_function(qs, x, y, z)
     matrix = Any[]
     for (i, A) in enumerate(As)
-        out = similar(x, complex(eltype(x)), n)
+        out = similar(x, complex(eltype(x)), length(qs))
         fn!(out, A)
         push!(matrix, out)
     end

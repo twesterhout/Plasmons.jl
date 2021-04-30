@@ -1,7 +1,7 @@
 module Plasmons
 
 export dielectric, polarizability, dispersion
-export main, julia_main
+export julia_main
 
 using CUDA
 using Adapt
@@ -79,14 +79,8 @@ products containing it. To return ``G`` in block-sparse form, set `blocks = true
 This function works with both CPU and GPU arrays. If vector `E` is stored on the GPU, then
 the returned matrix (or all submatrices for block-sparse version) will also reside on GPU.
 """
-g_matrix(
-    ::Type{T},
-    ħω::Complex{ℝ},
-    E::Vector{ℝ};
-    mu::ℝ,
-    kT::ℝ,
-    blocks::Bool,
-) where {T, ℝ <: Real} = _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
+g_matrix(::Type{T}, ħω::Complex{ℝ}, E::Vector{ℝ}; mu::ℝ, kT::ℝ, blocks::Bool) where {T, ℝ <: Real} =
+    _postprocess_g(T, _build_g(ħω, E; mu = mu, kT = kT), blocks)
 g_matrix(
     ::Type{T},
     ħω::Complex{ℝ},
@@ -280,36 +274,32 @@ end
 
 function _momentum_eigenvectors(
     qs::AbstractVector{NTuple{3, ℝ}},
-    x::AbstractVector{ℝ},
-    y::AbstractVector{ℝ},
-    z::AbstractVector{ℝ};
+    rs::AbstractVector{NTuple{3, ℝ}}
 ) where {ℝ <: Real}
-    out = similar(x, complex(eltype(x)), length(x), length(qs))
-    @inbounds for i in 1:size(out, 2)
-        fn = let (qˣ, qʸ, qᶻ) = qs[i]
-            (xᵢ, yᵢ, zᵢ) -> exp(1im * (qˣ * xᵢ + qʸ * yᵢ + qᶻ * zᵢ))
+    out = similar(rs, complex(ℝ), length(rs), length(qs))
+    @inbounds for j in 1:size(out, 2)
+        (qˣ, qʸ, qᶻ) = qs[j]
+        @simd for i in 1:size(out, 1)
+            (xᵢ, yᵢ, zᵢ) = rs[i]
+            out[i, j] = (1 / sqrt(length(rs))) * exp(1im * (qˣ * xᵢ + qʸ * yᵢ + qᶻ * zᵢ))
         end
-        map!(fn, view(out, :, i), x, y, z)
     end
     out
 end
-function _dispersion_function(
+function dispersion_function(
     qs::AbstractVector{NTuple{3, ℝ}},
-    x::AbstractVector{ℝ},
-    y::AbstractVector{ℝ},
-    z::AbstractVector{ℝ};
+    rs::AbstractVector{NTuple{3, ℝ}},
 ) where {ℝ <: Real}
-    if length(x) != length(y) || length(x) != length(z)
-        throw(DimensionMismatch("'x', 'y', and 'z' have different lengths: $(length(x)) vs. $(length(y)) vs. $(length(z))"))
-    end
-    return let ks = _momentum_eigenvectors(qs, x, y, z),
-        temp = similar(ks, length(x), size(ks, 2))
+    return let r_q = _momentum_eigenvectors(qs, rs),
+        temp = similar(r_q, length(rs), size(r_q, 2))
 
-        (out, A) -> begin
-            mul!(temp, A, ks)
+        A -> begin
+            mul!(temp, A, r_q)
+            out = similar(r_q, length(qs))
             @inbounds for i in 1:length(out)
-                out[i] = dot(view(ks, :, i), view(temp, :, i))
+                out[i] = dot(view(r_q, :, i), view(temp, :, i))
             end
+            out
         end
     end
 end
@@ -318,16 +308,17 @@ end
 
 Calculate diagonal elements of the Fourier transform of matrix A.
 """
-function dispersion(As, qs, x, y, z)
-    fn! = _dispersion_function(qs, x, y, z)
-    matrix = Any[]
-    for (i, A) in enumerate(As)
-        out = similar(x, complex(eltype(x)), length(qs))
-        fn!(out, A)
-        push!(matrix, out)
-    end
-    hcat(matrix...)
-end
+# function dispersion(As, qs, x, y, z)
+#     fn! = _dispersion_function(qs, x, y, z)
+#     matrix = Any[]
+#     for (i, A) in enumerate(As)
+#         out = similar(x, complex(eltype(x)), length(qs))
+#         fn!(out, A)
+#         push!(matrix, out)
+#     end
+#     hcat(matrix...)
+# end
+dispersion(A::AbstractMatrix, qs::AbstractVector, rs::AbstractVector) = dispersion_function(qs, rs)(A)
 
 
 function main(
@@ -362,13 +353,7 @@ function main(
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
         t₀ = time_ns()
-        χ = polarizability(
-            convert(complex(ℝ), ω),
-            E,
-            ψ;
-            mu = convert(ℝ, μ),
-            kT = convert(ℝ, kT),
-        )
+        χ = polarizability(convert(complex(ℝ), ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
         if typeof(χ) <: CuArray
             synchronize()
         end

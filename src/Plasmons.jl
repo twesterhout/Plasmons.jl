@@ -353,23 +353,23 @@ function main(
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
         t₀ = time_ns()
-        χ = polarizability(convert(complex(ℝ), ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
-        if typeof(χ) <: CuArray
-            synchronize()
-        end
+        χ = Array(polarizability(
+            convert(complex(ℝ), ω),
+            E,
+            ψ;
+            mu = convert(ℝ, μ),
+            kT = convert(ℝ, kT),
+        ))
         t₁ = time_ns()
-        group_χ[name] = Array(χ)
+        group_χ[name] = χ
         HDF5.attributes(group_χ[name])["ħω"] = ω
         HDF5.attributes(group_χ[name])["time"] = (t₁ - t₀) / 1e9
         flush(group_χ)
         if !isnothing(V)
             t₀ = time_ns()
-            ε = dielectric(χ, V)
-            if typeof(ε) <: CuArray
-                synchronize()
-            end
+            ε = Array(dielectric(χ, V))
             t₁ = time_ns()
-            group_ε[name] = Array(ε)
+            group_ε[name] = ε
             HDF5.attributes(group_ε[name])["ħω"] = ω
             HDF5.attributes(group_ε[name])["time"] = (t₁ - t₀) / 1e9
             flush(group_ε)

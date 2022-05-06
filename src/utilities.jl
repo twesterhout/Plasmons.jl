@@ -409,8 +409,8 @@ function dot_batched!(
     num_blocks(threads) = cld.(size(A), threads)
     amount_shmem(threads) = prod(threads) * sizeof(T)
     @assert stride(A, 1) == 1 && stride(B, 1) == 1
-    _A = CuArray{T, 2}(Base.unsafe_convert(CuPtr{Nothing}, A), (stride(A, 2), size(A, 2)))
-    _B = CuArray{T, 2}(Base.unsafe_convert(CuPtr{Nothing}, B), (stride(B, 2), size(B, 2)))
+    _A = unsafe_wrap(CuArray{T, 2}, Base.unsafe_convert(CuPtr{T}, A), (stride(A, 2), size(A, 2)))
+    _B = unsafe_wrap(CuArray{T, 2}, Base.unsafe_convert(CuPtr{T}, B), (stride(B, 2), size(B, 2)))
     kernel = @cuda launch = false dot_kernel_batched!(n, m, _A, _A, _B)
     config = launch_configuration(kernel.fun, shmem = amount_shmem)
     threads = num_threads(config.threads)
@@ -430,7 +430,7 @@ function dot_batched!(
     sum!(out, temp)
 end
 
-function _eigen!(A::Hermitian{T, CuArray{T, 2}}) where {T}
+function _eigen!(A::Hermitian{T, CuArray{T, 2, B}}) where {T, B}
     eigenvalues, eigenvectors = T <: Complex ? CUSOLVER.heevd!('V', A.uplo, A.data) :
         CUSOLVER.syevd!('V', A.uplo, A.data)
     return eigenvalues, eigenvectors

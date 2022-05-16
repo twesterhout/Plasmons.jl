@@ -1,35 +1,39 @@
-
-using LinearAlgebra
+using Adapt
+using CUDA
 using HDF5
+using LinearAlgebra
 using Plasmons
 
-function load(n)
-    h5open("square_sheet_$(n)x$n.hdf5") do f
-        H = read_hamiltonian(f)
-        p = read_coordinates(f)
-        return H, p
+load(n) = h5open(io -> read(io, "/H"), "input_square_$(n)x$(n).h5", "r")
+prepare(n) = eigen(load(n))
+ℝ = Float32 # Float64
+
+function run(E, ψ; usecuda=false, method=:simple, blocks=true)
+    # @assert method == :batched || method == :thesis
+    if usecuda
+        E = adapt(CuArray{ℝ}, E)
+        ψ = adapt(CuArray{ℝ}, ψ)
     end
-end
-
-function prepare(n = 20)
-    H, _ = load(n)
-    E, ψ = eigen(H)
-    return E, ψ
-end
-
-function run(E, ψ; method=:batched)
-    @assert method == :batched || method == :thesis
     η = 6e-3
     μ = 0.4
     kT = 8.617333262145E-5 * 300.0
-    ωs = [0.43, 0.44, 0.45, 0.46]
-    χ = Array{Any, 1}(undef, length(ωs))
+    ωs = [0.43, 0.44]
+    χs = []
+    ts = Float64[]
     for (i, ω) in enumerate(ωs)
-        if method == :batched
-            χ[i] = polarizability_batched(ω + η * 1im, E, ψ; mu = μ, kT = kT)
-        else
-            χ[i] = polarizability_thesis(ω + η * 1im, E, ψ; mu = μ, kT = kT)
-        end
+        t₀ = time_ns()
+        χ = Array(polarizability(
+            convert(complex(ℝ), ω),
+            E,
+            ψ;
+            mu = convert(ℝ, μ),
+            kT = convert(ℝ, kT),
+            method = method,
+            blocks = blocks,
+        ))
+        t₁ = time_ns()
+        push!(χs, χ)
+        push!(ts, (t₁ - t₀) / 1e9)
     end
-    return χ
+    return ts
 end

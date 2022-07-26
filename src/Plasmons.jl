@@ -379,7 +379,7 @@ function main(
         @warn "Coulomb interaction matrix was not provided: dielectric function ε(ω) will not be computed"
     end
     dimension = length(E)
-    number_vectors = max(min(8, dimension), dimension / 100)
+    number_vectors = max(min(8, dimension), div(dimension, 100))
     number_frequencies = length(ωs)
     ℂ = complex(ℝ)
 

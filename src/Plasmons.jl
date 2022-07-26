@@ -416,7 +416,7 @@ function main(
             values, vectors = leading_loss_function(ε, number_vectors)
             t₁ = time_ns()
             out["eigenstate"][:, :, i] = vectors
-            out["eigenvalue"][:, :, i] = values
+            out["eigenvalue"][:, i] = values
             loss_time += (t₁ - t₀) / 1e9
         end
     end

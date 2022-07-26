@@ -398,10 +398,10 @@ function main(
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
         t₀ = time_ns()
-        χ = Array(polarizability(convert(ℂ, ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT)))
+        χ = polarizability(convert(ℂ, ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT))
         t₁ = time_ns()
         χ_time += (t₁ - t₀) / 1e9
-        out["χ"][:, :, i] = χ
+        out["χ"][:, :, i] = Array(χ)
 
         if !isnothing(V)
             @info "Calculating ε(ω = $ω) ..."

@@ -369,11 +369,10 @@ function main(
     HDF5.attributes(out)["μ"] = μ
     HDF5.attributes(out)["η"] = η
 
-    group_χ = create_group(out, "χ")
-    group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
-    group_eels::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "EELS")
+    # group_χ = create_group(out, "χ")
+    # group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
+    # group_eels::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "EELS")
     @info "Polarizability matrices χ(ω) will be saved to dataset 'χ'"
-
     if !isnothing(V)
         @info "Dielectric functions ε(ω) will be saved to dataset 'ε'"
     else

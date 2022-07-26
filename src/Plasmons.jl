@@ -391,6 +391,7 @@ function main(
         create_dataset(out, "eigenvalue", ℂ, (number_vectors, number_frequencies))
     end
 
+
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
@@ -398,7 +399,7 @@ function main(
         χ = Array(polarizability(convert(ℂ, ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT)))
         t₁ = time_ns()
         out["χ"][:, :, i] = χ
-        HDF5.attributes(out["χ"])["time"] = (t₁ - t₀) / 1e9
+        HDF5.attributes(out["χ"])["time"] += (t₁ - t₀) / 1e9
 
         if !isnothing(V)
             @info "Calculating ε(ω = $ω) ..."
@@ -406,7 +407,7 @@ function main(
             ε = Array(dielectric(χ, V))
             t₁ = time_ns()
             out["ε"][:, :, i] = ε
-            HDF5.attributes(out["ε"])["time"] = (t₁ - t₀) / 1e9
+            HDF5.attributes(out["ε"])["time"] += (t₁ - t₀) / 1e9
 
             @info "Diagonalizing ε ..."
             t₀ = time_ns()
@@ -414,7 +415,7 @@ function main(
             t₁ = time_ns()
             out["eigenstate"][:, :, i] = vectors
             out["eigenvalue"][:, :, i] = values
-            HDF5.attributes(out["eigenvalue"])["time"] = (t₁ - t₀) / 1e9
+            HDF5.attributes(out["eigenvalue"])["time"] += (t₁ - t₀) / 1e9
         end
     end
 end

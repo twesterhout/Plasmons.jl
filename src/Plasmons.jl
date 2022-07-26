@@ -391,15 +391,17 @@ function main(
         create_dataset(out, "eigenvalue", ℂ, (number_vectors, number_frequencies))
     end
 
-
+    χ_time::Float64 = 0
+    ε_time::Float64 = 0
+    loss_time::Float64 = 0
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
         t₀ = time_ns()
         χ = Array(polarizability(convert(ℂ, ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT)))
         t₁ = time_ns()
+        χ_time += (t₁ - t₀) / 1e9
         out["χ"][:, :, i] = χ
-        HDF5.attributes(out["χ"])["time"] += (t₁ - t₀) / 1e9
 
         if !isnothing(V)
             @info "Calculating ε(ω = $ω) ..."
@@ -407,7 +409,7 @@ function main(
             ε = Array(dielectric(χ, V))
             t₁ = time_ns()
             out["ε"][:, :, i] = ε
-            HDF5.attributes(out["ε"])["time"] += (t₁ - t₀) / 1e9
+            ε_time += (t₁ - t₀) / 1e9
 
             @info "Diagonalizing ε ..."
             t₀ = time_ns()
@@ -415,8 +417,20 @@ function main(
             t₁ = time_ns()
             out["eigenstate"][:, :, i] = vectors
             out["eigenvalue"][:, :, i] = values
-            HDF5.attributes(out["eigenvalue"])["time"] += (t₁ - t₀) / 1e9
+            loss_time += (t₁ - t₀) / 1e9
         end
+    end
+
+    χ_time /= number_frequencies
+    ε_time /= number_frequencies
+    loss_time /= number_frequencies
+    HDF5.attributes(out["χ"])["time"] = χ_time
+    @info "On average, computing one χ(ω) matrix took $(χ_time) seconds"
+    if !isnothing(V)
+        HDF5.attributes(out["ε"])["time"] = ε_time
+        HDF5.attributes(out["eigenvalue"])["time"] = loss_time
+        @info "On average, computing one ε(ω) matrix took $(ε_time) seconds"
+        @info "On average, computing one loss for one ω took $(loss_time) seconds"
     end
 end
 function main!(H::AbstractMatrix{ℂ}; kwargs...) where {ℂ}

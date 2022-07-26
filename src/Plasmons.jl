@@ -339,7 +339,7 @@ dispersion(A::AbstractMatrix, qs::AbstractVector, rs::AbstractVector) =
 function leading_loss_function(ε::AbstractMatrix, n::Integer = 1, compute_eigenvectors::Bool = true)
     values, vectors = _eigen!(ε)
     eigenvalues = similar(ε, n)
-    eigenvectors = compute_eigenvectors ? similar(ε, size(V, 1), n) : nothing
+    eigenvectors = compute_eigenvectors ? similar(ε, size(ε, 1), n) : nothing
     for (j, k) in enumerate(sortperm(map(z -> -imag(1 / z), values), rev = true)[1:n])
         eigenvalues[j] = values[k]
         if compute_eigenvectors

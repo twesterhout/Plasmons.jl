@@ -115,10 +115,12 @@ function polarizability(
         throw(DimensionMismatch("'ψ' has wrong shape: $(size(ψ)); expected a square matrix"))
     end
     if size(E, 1) != size(ψ, 1)
-        throw(DimensionMismatch(
-            "dimensions of 'E' and 'ψ' do not match: $(size(E)) & $(size(ψ)); " *
-            "expected 'ψ' to be of the same dimension as 'E'",
-        ))
+        throw(
+            DimensionMismatch(
+                "dimensions of 'E' and 'ψ' do not match: $(size(E)) & $(size(ψ)); " *
+                "expected 'ψ' to be of the same dimension as 'E'",
+            ),
+        )
     end
     if method == :simple
         polarizability_simple(ħω, E, ψ; mu = mu, kT = kT)
@@ -256,25 +258,39 @@ end
 Compute dielectric function ``\varepsilon`` given polarizability matrix ``\chi`` and Coulomb
 interaction potential ``V``. Dielectric function is simply ``\varepsilon = 1 - \chi V``.
 """
+# function dielectric(χ::AbstractMatrix{Complex{ℝ}}, V::AbstractMatrix{ℝ}) where {ℝ <: Real}
+#     ℂ = complex(ℝ)
+#     if size(χ, 1) != size(χ, 2) || size(χ) != size(V)
+#         throw(DimensionMismatch(
+#             "dimensions of χ and V do not match: $(size(χ)) != $(size(V)); " *
+#             "expected two square matrices of the same size",
+#         ))
+#     end
+#     ε = similar(χ)
+#     fill!(ε, zero(ℂ))
+#     @inbounds ε[diagind(ε)] .= one(ℂ)
+#     mul!(ε, V, χ, -one(ℂ), one(ℂ))
+#     return ε
+# end
 function dielectric(χ::AbstractMatrix{Complex{ℝ}}, V::AbstractMatrix{ℝ}) where {ℝ <: Real}
-    ℂ = complex(ℝ)
     if size(χ, 1) != size(χ, 2) || size(χ) != size(V)
-        throw(DimensionMismatch(
-            "dimensions of χ and V do not match: $(size(χ)) != $(size(V)); " *
-            "expected two square matrices of the same size",
-        ))
+        throw(
+            DimensionMismatch(
+                "dimensions of χ and V do not match: $(size(χ)) != $(size(V)); " *
+                "expected two square matrices of the same size",
+            ),
+        )
     end
-    ε = similar(χ)
-    fill!(ε, zero(ℂ))
-    @inbounds ε[diagind(ε)] .= one(ℂ)
-    mul!(ε, V, χ, -one(ℂ), one(ℂ))
-    return ε
+    A = V * real(χ)
+    @inbounds A[diagind(A)] .-= one(ℝ)
+    B = V * imag(χ)
+    return @. -(A + 1im * B)
 end
 
 
 function _momentum_eigenvectors(
     qs::AbstractVector{NTuple{3, ℝ}},
-    rs::AbstractVector{NTuple{3, ℝ}}
+    rs::AbstractVector{NTuple{3, ℝ}},
 ) where {ℝ <: Real}
     out = similar(rs, complex(ℝ), length(rs), length(qs))
     @inbounds for j in 1:size(out, 2)
@@ -290,8 +306,7 @@ function dispersion_function(
     qs::AbstractVector{NTuple{3, ℝ}},
     rs::AbstractVector{NTuple{3, ℝ}},
 ) where {ℝ <: Real}
-    return let r_q = _momentum_eigenvectors(qs, rs),
-        temp = similar(r_q, length(rs), size(r_q, 2))
+    return let r_q = _momentum_eigenvectors(qs, rs), temp = similar(r_q, length(rs), size(r_q, 2))
 
         A -> begin
             mul!(temp, A, r_q)
@@ -318,8 +333,21 @@ Calculate diagonal elements of the Fourier transform of matrix A.
 #     end
 #     hcat(matrix...)
 # end
-dispersion(A::AbstractMatrix, qs::AbstractVector, rs::AbstractVector) = dispersion_function(qs, rs)(A)
+dispersion(A::AbstractMatrix, qs::AbstractVector, rs::AbstractVector) =
+    dispersion_function(qs, rs)(A)
 
+function leading_loss_function(ε::AbstractMatrix, n::Integer = 1, compute_eigenvectors::Bool = true)
+    values, vectors = _eigen!(ε)
+    eigenvalues = similar(ε, n)
+    eigenvectors = compute_eigenvectors ? similar(ε, size(V, 1), n) : nothing
+    for (j, k) in enumerate(sortperm(map(z -> -imag(1 / z), values), rev = true)[1:n])
+        eigenvalues[j] = values[k]
+        if compute_eigenvectors
+            eigenvectors[:, j] .= view(vectors, :, k)
+        end
+    end
+    eigenvalues, eigenvectors
+end
 
 function main(
     E::AbstractVector{ℝ},
@@ -340,39 +368,54 @@ function main(
     HDF5.attributes(out)["kT"] = kT
     HDF5.attributes(out)["μ"] = μ
     HDF5.attributes(out)["η"] = η
+
     group_χ = create_group(out, "χ")
     group_ε::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "ε")
-    @info "Polarizability matrices χ(ω) will be saved to group 'χ'"
+    group_eels::Union{HDF5.Group, Nothing} = isnothing(V) ? nothing : create_group(out, "EELS")
+    @info "Polarizability matrices χ(ω) will be saved to dataset 'χ'"
+
     if !isnothing(V)
-        @info "Dielectric functions ε(ω) will be saved to group 'ε'"
+        @info "Dielectric functions ε(ω) will be saved to dataset 'ε'"
     else
-        @warn "Coulomb interaction matrix not provided: dielectric function ε(ω) will not be computed"
+        @warn "Coulomb interaction matrix was not provided: dielectric function ε(ω) will not be computed"
+    end
+    dimension = length(E)
+    number_vectors = max(min(8, dimension), dimension / 100)
+    number_frequencies = length(ωs)
+    ℂ = complex(ℝ)
+
+    out["ħω"] = map(x -> x + 1im * η, ωs)
+    create_dataset(out, "χ", ℂ, (dimension, dimension, number_frequencies))
+    if !isnothing(V)
+        create_dataset(out, "ε", ℂ, (dimension, dimension, number_frequencies))
+        create_dataset(out, "eigenstate", ℂ, (dimension, number_vectors, number_frequencies))
+        create_dataset(out, "eigenvalue", ℂ, (number_vectors, number_frequencies))
     end
 
     for (i, ω) in enumerate(map(x -> x + 1im * η, ωs))
         @info "Calculating χ(ω = $ω) ..."
         name = string(i, pad = 4)
         t₀ = time_ns()
-        χ = Array(polarizability(
-            convert(complex(ℝ), ω),
-            E,
-            ψ;
-            mu = convert(ℝ, μ),
-            kT = convert(ℝ, kT),
-        ))
+        χ = Array(polarizability(convert(ℂ, ω), E, ψ; mu = convert(ℝ, μ), kT = convert(ℝ, kT)))
         t₁ = time_ns()
-        group_χ[name] = χ
-        HDF5.attributes(group_χ[name])["ħω"] = ω
-        HDF5.attributes(group_χ[name])["time"] = (t₁ - t₀) / 1e9
-        flush(group_χ)
+        out["χ"][:, :, i] = χ
+        HDF5.attributes(out["χ"])["time"] = (t₁ - t₀) / 1e9
+
         if !isnothing(V)
+            @info "Calculating ε(ω = $ω) ..."
             t₀ = time_ns()
             ε = Array(dielectric(χ, V))
             t₁ = time_ns()
-            group_ε[name] = ε
-            HDF5.attributes(group_ε[name])["ħω"] = ω
-            HDF5.attributes(group_ε[name])["time"] = (t₁ - t₀) / 1e9
-            flush(group_ε)
+            out["ε"][:, :, i] = ε
+            HDF5.attributes(out["ε"])["time"] = (t₁ - t₀) / 1e9
+
+            @info "Diagonalizing ε ..."
+            t₀ = time_ns()
+            values, vectors = leading_loss_function(ε, number_vectors)
+            t₁ = time_ns()
+            out["eigenstate"][:, :, i] = vectors
+            out["eigenvalue"][:, :, i] = values
+            HDF5.attributes(out["eigenvalue"])["time"] = (t₁ - t₀) / 1e9
         end
     end
 end

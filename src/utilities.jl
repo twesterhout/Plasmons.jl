@@ -7,7 +7,7 @@ const dependency_lock = ReentrantLock()
 # the arguments to this macro is the name of the ref, an expression to populate it
 # (possibly returning `nothing` if the library wasn't found), and an optional initialization
 # hook to be executed after successfully discovering the library and setting the ref.
-macro initialize_ref(ref, ex, hook=:())
+macro initialize_ref(ref, ex, hook = :())
     quote
         ref = $ref
 
@@ -16,7 +16,7 @@ macro initialize_ref(ref, ex, hook=:())
             Base.@lock dependency_lock begin
                 if !isassigned(ref)
                     val = $ex
-                    if val === nothing && !(eltype($ref) <: Union{Nothing,<:Any})
+                    if val === nothing && !(eltype($ref) <: Union{Nothing, <:Any})
                         error($"Could not find a required library")
                     end
                     $ref[] = val
@@ -84,7 +84,7 @@ magma_setdevice(device::Integer) =
     throw(ArgumentError("invalid op: $op; expected either 'N' or 'V'"))
 end
 
-for (fname, elty) in ((Symbol(":magma_zgeev"), :ComplexF64), ) # ("magma_cgeev", :ComplexF32), 
+for (fname, elty) in ((Symbol(":magma_zgeev"), :ComplexF64),) # ("magma_cgeev", :ComplexF32),
     @eval begin
         function magma_geev!(jobvl::AbstractChar, jobvr::AbstractChar, A::AbstractMatrix{$elty})
             stride(A, 1) == 1 || throw(ArgumentError("matrix A does not have contiguous columns"))
@@ -93,32 +93,90 @@ for (fname, elty) in ((Symbol(":magma_zgeev"), :ComplexF64), ) # ("magma_cgeev",
             # chkfinite(A) # balancing routines don't support NaNs and Infs
             lvecs = jobvl == 'V'
             rvecs = jobvr == 'V'
-            VL    = similar(A, $elty, (n, lvecs ? n : 0))
-            VR    = similar(A, $elty, (n, rvecs ? n : 0))
-            w     = similar(A, $elty, n)
+            VL = similar(A, $elty, (n, lvecs ? n : 0))
+            VR = similar(A, $elty, (n, rvecs ? n : 0))
+            w = similar(A, $elty, n)
             rwork = similar(A, real($elty), 2 * n)
-            work  = Vector{$elty}(undef, 1)
+            work = Vector{$elty}(undef, 1)
             lwork = magma_int_t(-1)
-            info  = Ref{magma_int_t}()
-            lda   = max(1, stride(A, 2))
+            info = Ref{magma_int_t}()
+            lda = max(1, stride(A, 2))
 
             jobvl = char_to_vec(jobvl)
             jobvr = char_to_vec(jobvr)
 
-            for i = 1:2  # first call returns lwork as work[1]
+            for i in 1:2  # first call returns lwork as work[1]
                 if $elty == ComplexF64
-                    ccall((:magma_zgeev, libmagma()), magma_int_t,
-                          (magma_vec_t, magma_vec_t, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, Ref{$elty}, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, magma_int_t, Ref{real($elty)}, Ref{magma_int_t}),
-                          jobvl, jobvr, n, A, lda, w, VL, n, VR, n, work, lwork, rwork, info)
+                    ccall(
+                        (:magma_zgeev, libmagma()),
+                        magma_int_t,
+                        (
+                            magma_vec_t,
+                            magma_vec_t,
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{real($elty)},
+                            Ref{magma_int_t},
+                        ),
+                        jobvl,
+                        jobvr,
+                        n,
+                        A,
+                        lda,
+                        w,
+                        VL,
+                        n,
+                        VR,
+                        n,
+                        work,
+                        lwork,
+                        rwork,
+                        info,
+                    )
                 else
                     @assert $elty == ComplexF32
-                    ccall((:magma_cgeev, libmagma()), magma_int_t,
-                          (magma_vec_t, magma_vec_t, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, Ref{$elty}, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, magma_int_t, Ref{real($elty)}, Ref{magma_int_t}),
-                          jobvl, jobvr, n, A, lda, w, VL, n, VR, n, work, lwork, rwork, info)
+                    ccall(
+                        (:magma_cgeev, libmagma()),
+                        magma_int_t,
+                        (
+                            magma_vec_t,
+                            magma_vec_t,
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{real($elty)},
+                            Ref{magma_int_t},
+                        ),
+                        jobvl,
+                        jobvr,
+                        n,
+                        A,
+                        lda,
+                        w,
+                        VL,
+                        n,
+                        VR,
+                        n,
+                        work,
+                        lwork,
+                        rwork,
+                        info,
+                    )
                 end
                 if i == 1
                     lwork = ceil(magma_int_t, real(work[1]))
@@ -135,32 +193,90 @@ for (fname, elty) in ((Symbol(":magma_zgeev"), :ComplexF64), ) # ("magma_cgeev",
             # chkfinite(A) # balancing routines don't support NaNs and Infs
             lvecs = jobvl == 'V'
             rvecs = jobvr == 'V'
-            VL    = similar(A, $elty, (n, lvecs ? n : 0))
-            VR    = similar(A, $elty, (n, rvecs ? n : 0))
-            w     = similar(A, $elty, n)
+            VL = similar(A, $elty, (n, lvecs ? n : 0))
+            VR = similar(A, $elty, (n, rvecs ? n : 0))
+            w = similar(A, $elty, n)
             rwork = similar(A, real($elty), 2 * n)
-            work  = Vector{$elty}(undef, 1)
+            work = Vector{$elty}(undef, 1)
             lwork = magma_int_t(-1)
-            info  = Ref{magma_int_t}()
-            lda   = max(1, stride(A, 2))
+            info = Ref{magma_int_t}()
+            lda = max(1, stride(A, 2))
 
             jobvl = char_to_vec(jobvl)
             jobvr = char_to_vec(jobvr)
 
-            for i = 1:2  # first call returns lwork as work[1]
+            for i in 1:2  # first call returns lwork as work[1]
                 if $elty == ComplexF64
-                    ccall((:magma_zgeev_m, libmagma()), magma_int_t,
-                          (magma_vec_t, magma_vec_t, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, Ref{$elty}, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, magma_int_t, Ref{real($elty)}, Ref{magma_int_t}),
-                          jobvl, jobvr, n, A, lda, w, VL, n, VR, n, work, lwork, rwork, info)
+                    ccall(
+                        (:magma_zgeev_m, libmagma()),
+                        magma_int_t,
+                        (
+                            magma_vec_t,
+                            magma_vec_t,
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{real($elty)},
+                            Ref{magma_int_t},
+                        ),
+                        jobvl,
+                        jobvr,
+                        n,
+                        A,
+                        lda,
+                        w,
+                        VL,
+                        n,
+                        VR,
+                        n,
+                        work,
+                        lwork,
+                        rwork,
+                        info,
+                    )
                 else
                     @assert $elty == ComplexF32
-                    ccall((:magma_cgeev_m, libmagma()), magma_int_t,
-                          (magma_vec_t, magma_vec_t, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, Ref{$elty}, magma_int_t, Ref{$elty}, magma_int_t,
-                           Ref{$elty}, magma_int_t, Ref{real($elty)}, Ref{magma_int_t}),
-                          jobvl, jobvr, n, A, lda, w, VL, n, VR, n, work, lwork, rwork, info)
+                    ccall(
+                        (:magma_cgeev_m, libmagma()),
+                        magma_int_t,
+                        (
+                            magma_vec_t,
+                            magma_vec_t,
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{$elty},
+                            magma_int_t,
+                            Ref{real($elty)},
+                            Ref{magma_int_t},
+                        ),
+                        jobvl,
+                        jobvr,
+                        n,
+                        A,
+                        lda,
+                        w,
+                        VL,
+                        n,
+                        VR,
+                        n,
+                        work,
+                        lwork,
+                        rwork,
+                        info,
+                    )
                 end
                 if i == 1
                     lwork = ceil(magma_int_t, real(work[1]))
@@ -236,8 +352,7 @@ for elty in (:Float32, :Float64, :ComplexF32, :ComplexF64)
                 _gemm!('N', 'N', a, A, B, b, C)
             end
         end
-        _mul_with_strides!(C::StridedMatrix{$elty}, A, B, a::$elty, b::$elty) =
-            mul!(C, A, B, a, b)
+        _mul_with_strides!(C::StridedMatrix{$elty}, A, B, a::$elty, b::$elty) = mul!(C, A, B, a, b)
     end
 end
 
@@ -271,10 +386,8 @@ function Base.size(x::ThreeBlockMatrix, dim::Integer)
     dim <= 2 ? size(x.block₁, 1) + size(x.block₂, 1) : 1
 end
 
-Base.real(x::ThreeBlockMatrix) =
-    ThreeBlockMatrix(real(x.block₁), real(x.block₂), real(x.block₃))
-Base.imag(x::ThreeBlockMatrix) =
-    ThreeBlockMatrix(imag(x.block₁), imag(x.block₂), imag(x.block₃))
+Base.real(x::ThreeBlockMatrix) = ThreeBlockMatrix(real(x.block₁), real(x.block₂), real(x.block₃))
+Base.imag(x::ThreeBlockMatrix) = ThreeBlockMatrix(imag(x.block₁), imag(x.block₂), imag(x.block₃))
 
 Base.show(io::IO, x::ThreeBlockMatrix) = print(io, "ThreeBlockMatrix")
 
@@ -318,7 +431,9 @@ contiguous storage for faster matrix-matrix products).
 """
 function ThreeBlockMatrix(G::AbstractMatrix, n₁::Integer, n₂::Integer)
     if size(G, 1) != size(G, 2)
-        throw(DimensionMismatch("'G' must be a square matrix, but got a matrix of shape $(size(G))"))
+        throw(
+            DimensionMismatch("'G' must be a square matrix, but got a matrix of shape $(size(G))"),
+        )
     end
     n₁ >= 0 || throw(ArgumentError("Invalid 'n₁': $n₁"))
     n₂ >= 0 || throw(ArgumentError("Invalid 'n₂': $n₂"))
@@ -468,20 +583,18 @@ We replace one bigg GEMM by three smaller:
 function LinearAlgebra.mul!(C::AbstractMatrix, A::AbstractMatrix, B::ThreeBlockMatrix, α, β)
     N = size(B, 1)
     if size(A, 2) != N
-        throw(DimensionMismatch("Dimensions of 'A' and 'B' are incompatible: $(size(A)) vs $(size(B))"))
+        throw(
+            DimensionMismatch(
+                "Dimensions of 'A' and 'B' are incompatible: $(size(A)) vs $(size(B))",
+            ),
+        )
     end
     if size(C) != size(A)
         throw(DimensionMismatch("'C' has wrong dimension: $(size(C)), expected $(size(A))"))
     end
     n₁ = size(B.block₂, 1)
     n₂ = size(B.block₃, 2)
-    _mul_with_strides!(
-        view(C, :, 1:size(B.block₁, 2)),
-        view(A, :, (n₁ + 1):N),
-        B.block₁,
-        α,
-        β,
-    )
+    _mul_with_strides!(view(C, :, 1:size(B.block₁, 2)), view(A, :, (n₁ + 1):N), B.block₁, α, β)
     if n₁ > 0
         # NOTE: If n₁ is zero, then A B α + C β amount to C β, and since β is 1 we can drop
         # it altogerher.
@@ -498,11 +611,7 @@ function LinearAlgebra.mul!(C::AbstractMatrix, A::AbstractMatrix, B::ThreeBlockM
 end
 
 dot_batched(A, B) = dot_batched!(similar(A, size(A, 1)), A, B)
-function dot_batched!(
-    out::StridedVector{T},
-    A::StridedMatrix{T},
-    B::StridedMatrix{T},
-) where {T}
+function dot_batched!(out::StridedVector{T}, A::StridedMatrix{T}, B::StridedMatrix{T}) where {T}
     if size(A) != size(B)
         throw(DimensionMismatch("Dimensions of 'A' and 'B' do not match: $(size(A)) != $(size(B))"))
     end
@@ -590,22 +699,13 @@ function dot_batched!(
     blocks = num_blocks(threads)
     shmem = amount_shmem(threads)
     temp = similar(A, n, blocks[2])
-    GC.@preserve A B kernel(
-        n,
-        m,
-        temp,
-        _A,
-        _B;
-        threads = threads,
-        blocks = blocks,
-        shmem = shmem,
-    )
+    GC.@preserve A B kernel(n, m, temp, _A, _B; threads = threads, blocks = blocks, shmem = shmem)
     sum!(out, temp)
 end
 
 function _eigen!(A::Hermitian{T, CuArray{T, 2, B}}) where {T, B}
-    eigenvalues, eigenvectors = T <: Complex ? CUSOLVER.heevd!('V', A.uplo, A.data) :
-        CUSOLVER.syevd!('V', A.uplo, A.data)
+    eigenvalues, eigenvectors =
+        T <: Complex ? CUSOLVER.heevd!('V', A.uplo, A.data) : CUSOLVER.syevd!('V', A.uplo, A.data)
     return eigenvalues, eigenvectors
 end
 function _eigen!(A::Hermitian{T, Array{T, 2}}) where {T}
@@ -616,8 +716,8 @@ function _eigen!(A::AbstractMatrix{T}) where {T <: Complex}
     compute_right_eigenvectors = 'V'
     compute_left_eigenvectors = 'N'
     values, _, vectors =
-        hasmagma() ? magma_geev!(compute_left_eigenvectors, compute_right_eigenvectors, A)
-                   : LAPACK.geev!(compute_left_eigenvectors, compute_right_eigenvectors, A)
+        hasmagma() ? magma_geev!(compute_left_eigenvectors, compute_right_eigenvectors, A) :
+        LAPACK.geev!(compute_left_eigenvectors, compute_right_eigenvectors, A)
     return values, vectors
 end
 

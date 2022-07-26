@@ -351,14 +351,14 @@ end
 
 function main(
     E::AbstractVector{ℝ},
-    ψ::AbstractMatrix{ℂ};
+    ψ::AbstractMatrix{ℝorℂ};
     kT::Real,
     μ::Real,
     η::Real,
     ωs::Vector{<:Real},
     out::Union{HDF5.File, HDF5.Group},
     V::Union{AbstractMatrix{ℝ}, Nothing} = nothing,
-) where {ℝ <: Real, ℂ <: Union{ℝ, Complex{ℝ}}}
+) where {ℝ <: Real, ℝorℂ <: Union{ℝ, Complex{ℝ}}}
     if kT <= 0
         throw(ArgumentError("invalid 'kT': $kT; expected a positive real number"))
     end
